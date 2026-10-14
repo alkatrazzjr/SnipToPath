@@ -1,0 +1,57 @@
+name: UI previews
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  render:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render WPF windows (light and dark)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+          $source = Get-Content .\SnipToPath.ps1 -Raw -Encoding UTF8
+          New-Item -ItemType Directory -Path ui-previews | Out-Null
+          foreach ($windowType in @('xaml', 'quickXaml')) {
+            $pattern = '(?s)\$' + $windowType + '\s*=\s*@''\r?\n(.*?)\r?\n''@'
+            $m = [regex]::Match($source, $pattern)
+            if (-not $m.Success) { throw "Missing XAML: $windowType" }
+            foreach ($dark in @($false, $true)) {
+              $w = [Windows.Markup.XamlReader]::Parse($m.Groups[1].Value)
+              $palette = if ($dark) { @{
+                PageBrush = '#17181A'; CardBrush = '#242529'; AltBrush = '#303136'
+                TextBrush = '#F7F7F7'; SubtleBrush = '#B6B9C3'; LineBrush = '#414349'
+                HoverBrush = '#373A40'; AccentSubtleBrush = '#283B4D'; OffBrush = '#60646D'
+                AccentBrush = '#1976D2'
+              } } else { @{} }
+              foreach ($name in $palette.Keys) {
+                $color = [Windows.Media.ColorConverter]::ConvertFromString($palette[$name])
+                $w.Resources[$name] = [Windows.Media.SolidColorBrush]::new($color)
+              }
+              $width = if ($windowType -eq 'xaml') { 696 } else { 372 }
+              $height = if ($windowType -eq 'xaml') { 600 } else { 475 }
+              $visual = $w.Content
+              $size = [Windows.Size]::new($width, $height)
+              $visual.Measure($size)
+              $visual.Arrange([Windows.Rect]::new(0, 0, $width, $height))
+              $visual.UpdateLayout()
+              $bmp = [Windows.Media.Imaging.RenderTargetBitmap]::new(
+                [int]$width, [int]$height, 96, 96, [Windows.Media.PixelFormats]::Pbgra32)
+              $bmp.Render($visual)
+              $encoder = [Windows.Media.Imaging.PngBitmapEncoder]::new()
+              $encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bmp))
+              $style = if ($dark) { 'dark' } else { 'light' }
+              $target = Join-Path ui-previews ("$windowType-$style.png")
+              $stream = [IO.File]::Create($target)
+              try { $encoder.Save($stream) } finally { $stream.Dispose(); $w.Close() }
+              if ((Get-Item $target).Length -lt 3000) { throw "Preview unexpectedly small: $target" }
+              Write-Host "Rendered $target"
+            }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sniptopath-ui-previews
+          path: ui-previews/*.png
+          retention-days: 7
