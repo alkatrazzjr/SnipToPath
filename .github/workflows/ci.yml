@@ -44,13 +44,13 @@ jobs:
             Write-Host "PASS WPF XAML parse: $variable"
           }
           # Compile the actual WPF/Win32 and native Explorer folder-picker types.
-          $nativeMatch = [regex]::Match($source, "(?s)Add-Type -TypeDefinition @'\\r?\\n(.*?)\\r?\\n'@ -ReferencedAssemblies 'System.Drawing', 'System.Windows.Forms'")
+          $nativeMatch = [regex]::Match($source, '(?s)Add-Type -TypeDefinition @''\r?\n(.*?)\r?\n''@ -ReferencedAssemblies ''System.Drawing'', ''System.Windows.Forms''')
           if (-not $nativeMatch.Success) { throw 'Native UI C# declaration not found' }
           Add-Type -TypeDefinition $nativeMatch.Groups[1].Value -ReferencedAssemblies 'System.Drawing', 'System.Windows.Forms'
           if (-not ([SnipUI.Native].GetMethod('SetWindowPos'))) { throw 'Native HWND positioning is missing' }
           if (-not ([SnipUI.FolderPicker].GetMethod('Pick'))) { throw 'Modern folder picker is missing' }
           Write-Host 'PASS Win32 menu positioning and Explorer folder picker compile'
-          $quickMatch = [regex]::Match($source, "(?s)\\$quickXaml\\s*=\\s*@'\\r?\\n(.*?)\\r?\\n'@")
+          $quickMatch = [regex]::Match($source, '(?s)\$quickXaml\s*=\s*@''\r?\n(.*?)\r?\n''@')
           if (-not $quickMatch.Success) { throw 'Quick menu XAML not found' }
           $quick = [Windows.Markup.XamlReader]::Parse($quickMatch.Groups[1].Value)
           foreach ($name in @('QuickEnabled','QuickSettings','QuickExit')) {
