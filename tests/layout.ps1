@@ -83,6 +83,44 @@ foreach ($lang in @('ru', 'en')) {
             if ($viewer.ScrollableHeight -le 1) {
                 throw 'Short-window scrolling fallback is broken'
             }
+            # Test the actual visible WPF scrollbar, not only XAML syntax:
+            # short windows must show the narrow themed scrollbar.
+            $viewer.ApplyTemplate() | Out-Null
+            $bar = $viewer.Template.FindName('PART_VerticalScrollBar', $viewer)
+            if ($null -eq $bar) { throw 'Settings vertical scrollbar is missing' }
+            if ($bar.Visibility -ne [System.Windows.Visibility]::Visible) {
+                throw 'Scrollbar should be visible when the settings window is short'
+            }
+            if ([Math]::Abs($bar.Width - 12) -gt 0.1) {
+                throw 'The old full-width system scrollbar is still in use'
+            }
+            $bar.ApplyTemplate() | Out-Null
+            $track = $bar.Template.FindName('PART_Track', $bar)
+            if ($null -eq $track -or $null -eq $track.Thumb) {
+                throw 'Custom scrollbar track or draggable thumb is missing'
+            }
+            foreach ($variant in @(
+                @{ Name='light'; Page='#F3F3F3'; Thumb='#A0A5AF' },
+                @{ Name='dark'; Page='#17181A'; Thumb='#5D6470' }
+            )) {
+                $page = [Windows.Media.ColorConverter]::ConvertFromString($variant.Page)
+                $thumbColor = [Windows.Media.ColorConverter]::ConvertFromString($variant.Thumb)
+                $window.Resources['PageBrush'] = [Windows.Media.SolidColorBrush]::new($page)
+                $window.Resources['ScrollThumbBrush'] = [Windows.Media.SolidColorBrush]::new($thumbColor)
+                $window.Content.UpdateLayout()
+                if ($bar.Background.Color -ne $page) {
+                    throw "Scrollbar track doesn't follow the $($variant.Name) theme"
+                }
+                if ($track.Thumb.Background.Color -ne $thumbColor) {
+                    throw "Scrollbar thumb doesn't follow the $($variant.Name) theme"
+                }
+            }
+            $viewer.ScrollToVerticalOffset($viewer.ScrollableHeight)
+            $viewer.UpdateLayout()
+            if ($viewer.VerticalOffset -lt ($viewer.ScrollableHeight - 1.5)) {
+                throw 'Settings cannot scroll down to the last section'
+            }
+            Write-Host "PASS theme-aware draggable scrollbar on short windows ($lang, $width)"
         }
         finally { $window.Close() }
     }
