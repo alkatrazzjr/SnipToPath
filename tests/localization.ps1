@@ -1,4 +1,4 @@
-# Test auto language selection, translation coverage and live WPF switching on Windows.
+﻿# Test auto language selection, translation coverage and live WPF switching on Windows.
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 
