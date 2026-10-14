@@ -7,10 +7,29 @@ $source = Get-Content (Join-Path $PSScriptRoot '..\SnipToPath.ps1') -Raw -Encodi
 $m = [regex]::Match($source, '(?s)\$xaml\s*=\s*@''\r?\n(.*?)\r?\n''@')
 if (-not $m.Success) { throw 'Settings XAML is missing' }
 
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
+foreach ($fn in @('Get-TranslationTable','Get-EffectiveLanguage','Translate-UI','Update-WpfLanguage')) {
+    $defs = @($ast.FindAll({ param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $fn
+    }, $true))
+    if ($defs.Count -ne 1) { throw "Missing locale function: $fn" }
+    Invoke-Expression $defs[0].Extent.Text
+}
+$script:translationsEn = Get-TranslationTable
+$script:translationsRu = @{}
+foreach ($key in $script:translationsEn.Keys) {
+    $value = [string]$script:translationsEn[$key]
+    if (-not $script:translationsRu.ContainsKey($value)) { $script:translationsRu[$value] = $key }
+}
+
 foreach ($lang in @('ru', 'en')) {
     foreach ($width in @(720, 654)) {
         $window = [Windows.Markup.XamlReader]::Parse($m.Groups[1].Value)
         try {
+            $script:config = @{ LanguageMode = $(if ($lang -eq 'ru') { 'Ru' } else { 'En' }) }
+            Update-WpfLanguage $window
             # Client area at the default 720px window height (title bar excluded).
             $client = [Windows.Size]::new($width, 688)
             $window.Content.Measure($client)
@@ -24,8 +43,8 @@ foreach ($lang in @('ru', 'en')) {
             $viewer = $scroll[0]
             $overflowY = [Math]::Max(0, $viewer.ExtentHeight - $viewer.ViewportHeight)
             $overflowX = [Math]::Max(0, $viewer.ExtentWidth - $viewer.ViewportWidth)
-            Write-Host ("Layout at {0}px client width: viewport={1:N1}x{2:N1}, extent={3:N1}x{4:N1}, overflow={5:N1}x{6:N1}" -f
-                $width,$viewer.ViewportWidth,$viewer.ViewportHeight,$viewer.ExtentWidth,$viewer.ExtentHeight,
+            Write-Host ("Layout {0} at {1}px client width: viewport={1:N1}x{2:N1}, extent={3:N1}x{4:N1}, overflow={5:N1}x{6:N1}" -f
+                $lang,$width,$viewer.ViewportWidth,$viewer.ViewportHeight,$viewer.ExtentWidth,$viewer.ExtentHeight,
                 $overflowX,$overflowY)
             if ($overflowY -gt 1.5) { throw "Settings require scrolling at the default window size (width $width)" }
             if ($overflowX -gt 1.5) { throw "Settings are too wide at width $width" }
