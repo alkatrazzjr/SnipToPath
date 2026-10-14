@@ -52,8 +52,8 @@ foreach ($lang in @('ru', 'en')) {
                     throw 'TextBox padding clips native WPF content'
                 }
                 $inputBox.ApplyTemplate() | Out-Null
-                $host = $inputBox.Template.FindName('PART_ContentHost', $inputBox)
-                if (-not $host) { throw 'Native TextBox content host not found' }
+                $contentHost = $inputBox.Template.FindName('PART_ContentHost', $inputBox)
+                if (-not $contentHost) { throw 'Native TextBox content host not found' }
                 if ($inputBox.ActualHeight -lt 30) { throw 'Text input height is too small' }
             }
             Write-Host "PASS native input hosts and 35px fields ($lang, width $width)"
