@@ -5,7 +5,7 @@ $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Application source has parse errors' }
 
-foreach ($name in @('Remove-OwnScreenshots', 'Queue-PreviousScreenshot', 'Invoke-PendingScreenshotCleanup', 'Install-ScriptSafely')) {
+foreach ($name in @('Remove-OwnScreenshots', 'Queue-PreviousScreenshot', 'Invoke-PendingScreenshotCleanup', 'Install-ScriptSafely', 'Get-TrayMenuPosition', 'Resolve-ScreenshotFolder', 'ConvertTo-DelaySeconds')) {
     $defs = @($ast.FindAll({ param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
     }, $true))
@@ -28,15 +28,15 @@ try {
     }
     Write-Host 'PASS strict screenshot cleanup (no unrelated files deleted)'
 
-    $script:config = @{ AutoDeleteOnCopy = $true; DeleteDelayMinutes = 15 }
+    $script:config = @{ AutoDeleteOnCopy = $true; DeleteDelaySeconds = 42 }
     $script:pendingScreenshotDeletes = New-Object 'System.Collections.Generic.List[object]'
     $path = Join-Path $folder 'snip-20261014-043000-015-abcdef.png'
     [IO.File]::WriteAllBytes($path, [byte[]](5,6,7))
     $script:lastScreenshotPath = $path
     Queue-PreviousScreenshot
     if ($script:pendingScreenshotDeletes.Count -ne 1) { throw 'Missing scheduled cleanup' }
-    $delay = ($script:pendingScreenshotDeletes[0].DeleteAfter - [DateTime]::UtcNow).TotalMinutes
-    if ($delay -lt 14 -or $delay -gt 16) { throw 'Wrong cleanup delay' }
+    $delay = ($script:pendingScreenshotDeletes[0].DeleteAfter - [DateTime]::UtcNow).TotalSeconds
+    if ($delay -lt 40 -or $delay -gt 44) { throw 'Wrong cleanup delay in seconds' }
     Invoke-PendingScreenshotCleanup
     if (-not (Test-Path $path)) { throw 'Screenshot deleted too early' }
     $script:pendingScreenshotDeletes[0].DeleteAfter = [DateTime]::UtcNow.AddSeconds(-1)
@@ -136,3 +136,47 @@ finally {
         Remove-Item -LiteralPath $installRoot -Force -Recurse
     }
 }
+
+# Layout calculations run in native screen coordinates, not WPF DIPs.
+Add-Type -AssemblyName System.Drawing
+$cases = @(
+    @{ Name='bottom taskbar 100%'; X=1880; Y=1037; L=0; T=0; R=1920; B=1040; W=335; H=300 },
+    @{ Name='bottom taskbar 150%'; X=2520; Y=1380; L=0; T=0; R=2560; B=1400; W=500; H=430 },
+    @{ Name='secondary left monitor'; X=-30; Y=990; L=-1920; T=0; R=0; B=1000; W=380; H=290 },
+    @{ Name='secondary above monitor'; X=2450; Y=-240; L=1920; T=-1080; R=3200; B=-220; W=330; H=300 },
+    @{ Name='side taskbar'; X=75; Y=510; L=68; T=0; R=1920; B=1080; W=380; H=270 },
+    @{ Name='top taskbar'; X=180; Y=65; L=0; T=55; R=1920; B=1080; W=340; H=310 },
+    @{ Name='near right edge'; X=2550; Y=12; L=1920; T=0; R=2560; B=1400; W=540; H=330 }
+)
+foreach ($case in $cases) {
+    $pos = Get-TrayMenuPosition $case.X $case.Y $case.L $case.T $case.R $case.B $case.W $case.H
+    if ($pos.X -lt $case.L -or ($pos.X + $case.W) -gt $case.R -or
+        $pos.Y -lt $case.T -or ($pos.Y + $case.H) -gt $case.B) {
+        throw "Menu does not fit on the screen: $($case.Name)"
+    }
+}
+Write-Host 'PASS tray placement on scaled and multi-monitor screens'
+
+# Custom input accepts integer seconds, rejects invalid values and creates writable folders.
+foreach ($value in @('1','30','120','300','604800')) {
+    if ((ConvertTo-DelaySeconds $value) -ne [int]$value) { throw "Rejected allowed delay: $value" }
+}
+foreach ($value in @('0','-5','2.5','nan','604801','')) {
+    $rejected = $false
+    try { ConvertTo-DelaySeconds $value | Out-Null } catch { $rejected = $true }
+    if (-not $rejected) { throw "Accepted invalid delay: $value" }
+}
+$folderRoot = Join-Path ([IO.Path]::GetTempPath()) ('sniptopath-folder-test-' + [guid]::NewGuid().ToString('N'))
+try {
+    $folderPath = Join-Path $folderRoot 'new folder'
+    $resolved = Resolve-ScreenshotFolder $folderPath
+    if (-not (Test-Path -LiteralPath $resolved -PathType Container)) { throw 'Folder was not created' }
+    if (@(Get-ChildItem -LiteralPath $resolved -Force).Count -ne 0) { throw 'Write probe was not removed' }
+    $rejected = $false
+    try { Resolve-ScreenshotFolder '.\\relative-folder' | Out-Null } catch { $rejected = $true }
+    if (-not $rejected) { throw 'Accepted relative path' }
+}
+finally {
+    if (Test-Path -LiteralPath $folderRoot) { Remove-Item -LiteralPath $folderRoot -Recurse -Force }
+}
+Write-Host 'PASS custom delay seconds and editable screenshot folder validation'
