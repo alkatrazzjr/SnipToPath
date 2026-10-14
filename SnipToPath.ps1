@@ -1,4 +1,4 @@
-# SnipToPath — Snipping Tool clipboard images -> temporary PNG -> pasteable file path.
+﻿# SnipToPath — Snipping Tool clipboard images -> temporary PNG -> pasteable file path.
 # Windows 10/11, built-in Windows PowerShell 5.1 + Windows Forms; no external software.
 # Run this file without arguments to install/update, create a Start Menu shortcut, and launch.
 # Run the installed file with -Uninstall for complete removal.
