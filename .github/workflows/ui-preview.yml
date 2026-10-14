@@ -13,13 +13,31 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
           $source = Get-Content .\SnipToPath.ps1 -Raw -Encoding UTF8
+          $tokens = $null; $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
+          foreach ($fn in @('Get-TranslationTable','Get-EffectiveLanguage','Translate-UI','Update-WpfLanguage')) {
+            $found = @($ast.FindAll({ param($node)
+              $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $fn
+            }, $true))
+            if ($found.Count -ne 1) { throw "Missing UI language function: $fn" }
+            Invoke-Expression $found[0].Extent.Text
+          }
+          $script:translationsEn = Get-TranslationTable
+          $script:translationsRu = @{}
+          foreach ($key in $script:translationsEn.Keys) {
+            $english = [string]$script:translationsEn[$key]
+            if (-not $script:translationsRu.ContainsKey($english)) { $script:translationsRu[$english] = $key }
+          }
           New-Item -ItemType Directory -Path ui-previews | Out-Null
           foreach ($windowType in @('xaml', 'quickXaml')) {
             $pattern = '(?s)\$' + $windowType + '\s*=\s*@''\r?\n(.*?)\r?\n''@'
             $m = [regex]::Match($source, $pattern)
             if (-not $m.Success) { throw "Missing XAML: $windowType" }
-            foreach ($dark in @($false, $true)) {
-              $w = [Windows.Markup.XamlReader]::Parse($m.Groups[1].Value)
+            foreach ($lang in @('Ru','En')) {
+              foreach ($dark in @($false, $true)) {
+                $script:config = @{ LanguageMode = $lang }
+                $w = [Windows.Markup.XamlReader]::Parse($m.Groups[1].Value)
+                Update-WpfLanguage $w
               $palette = if ($dark) { @{
                 PageBrush = '#17181A'; CardBrush = '#242529'; AltBrush = '#303136'
                 TextBrush = '#F7F7F7'; SubtleBrush = '#B6B9C3'; LineBrush = '#414349'
@@ -43,11 +61,12 @@ jobs:
               $encoder = [Windows.Media.Imaging.PngBitmapEncoder]::new()
               $encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bmp))
               $style = if ($dark) { 'dark' } else { 'light' }
-              $target = Join-Path ui-previews ("$windowType-$style.png")
+              $target = Join-Path ui-previews ("$windowType-$lang-$style.png")
               $stream = [IO.File]::Create($target)
               try { $encoder.Save($stream) } finally { $stream.Dispose(); $w.Close() }
               if ((Get-Item $target).Length -lt 3000) { throw "Preview unexpectedly small: $target" }
               Write-Host "Rendered $target"
+              }
             }
           }
       - uses: actions/upload-artifact@v4
