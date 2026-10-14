@@ -28,7 +28,7 @@ Right-click the tray icon to toggle image processing, open your PNG folder in Fi
 
 ## Settings
 
-SnipToPath follows your Windows light/dark theme by default, or you can choose a theme manually. Settings also include startup with Windows, screenshot folder, automatic cleanup, and the UI language. You can type a full PNG directory path or select one using **Browse**.
+SnipToPath follows your Windows light/dark theme by default, or you can choose a theme manually. Settings also include startup with Windows, screenshot folder, automatic cleanup, and the UI language. If you resize the window smaller, you can scroll through the settings using a scrollbar that matches the selected theme. You can type a full PNG directory path or select one using **Browse**.
 
 **Language:** Automatic (default), Русский, or English. Automatic uses Russian when the Windows UI language is Russian, and English otherwise. Switching language in Settings applies immediately, without restarting.
 
