@@ -106,6 +106,22 @@ function Translate-UI([string]$value) {
     return $value
 }
 
+function Update-WpfLanguage($element) {
+    if ($null -eq $element -or -not ($element -is [System.Windows.DependencyObject])) { return }
+    if ($element -is [System.Windows.Window]) {
+        $element.Title = Translate-UI ([string]$element.Title)
+    }
+    if ($element -is [System.Windows.Controls.TextBlock]) {
+        $element.Text = Translate-UI ([string]$element.Text)
+    }
+    if ($element -is [System.Windows.Controls.ContentControl] -and $element.Content -is [string]) {
+        $element.Content = Translate-UI ([string]$element.Content)
+    }
+    foreach ($child in [System.Windows.LogicalTreeHelper]::GetChildren($element)) {
+        if ($child -is [System.Windows.DependencyObject]) { Update-WpfLanguage $child }
+    }
+}
+
 function Get-Defaults {
     return [ordered]@{
         Enabled        = $true
@@ -1084,13 +1100,13 @@ namespace SnipUI {
         private static extern int SHCreateItemFromParsingName(
             [MarshalAs(UnmanagedType.LPWStr)] string path, IntPtr pbc, ref Guid iid,
             [MarshalAs(UnmanagedType.Interface)] out IShellItem result);
-        public static string Pick(IntPtr owner, string initialFolder) {
+        public static string Pick(IntPtr owner, string initialFolder, string title) {
             IFileOpenDialog dialog = (IFileOpenDialog)new FileOpenDialogClass();
             try {
                 uint options;
                 dialog.GetOptions(out options);
                 dialog.SetOptions(options | 0x20u | 0x40u | 0x800u);
-                dialog.SetTitle("Выбрать папку для PNG");
+                dialog.SetTitle(title);
                 if (!String.IsNullOrWhiteSpace(initialFolder) && System.IO.Directory.Exists(initialFolder)) {
                     IShellItem initial = null;
                     Guid iid = typeof(IShellItem).GUID;
@@ -1166,7 +1182,7 @@ try {
     $script:context = New-Object System.Windows.Forms.ApplicationContext
     $script:notify = New-Object System.Windows.Forms.NotifyIcon
     $script:notify.Icon = $script:icon
-    $script:notify.Text = 'SnipToPath — скриншоты в пути'
+    $script:notify.Text = Translate-UI 'SnipToPath — скриншоты в пути'
 
     function Get-ThemeState {
         $mode = [string]$script:config.ThemeMode
@@ -1232,10 +1248,23 @@ try {
         }
     }
 
+    function Apply-Localization {
+        if ($script:settingsForm) { Update-WpfLanguage $script:settingsForm }
+        if ($script:quickMenu) { Update-WpfLanguage $script:quickMenu }
+    }
+
+    function Set-LanguageMode([string]$mode) {
+        if ($mode -notin @('Auto','Ru','En')) { return }
+        $script:config.LanguageMode = $mode
+        Save-Settings
+        Apply-Localization
+        Sync-UiState
+    }
+
     function Sync-UiState {
-        $script:notify.Text = if ($script:config.Enabled) { 'SnipToPath - работает' } else { 'SnipToPath - пауза' }
+        $script:notify.Text = if ($script:config.Enabled) { Translate-UI 'SnipToPath - работает' } else { Translate-UI 'SnipToPath - пауза' }
         if ($script:settingsForm) {
-            $script:ui.StatusName.Text = if ($script:config.Enabled) { 'Работает' } else { 'На паузе' }
+            $script:ui.StatusName.Text = if ($script:config.Enabled) { Translate-UI 'Работает' } else { Translate-UI 'На паузе' }
             $script:ui.EnabledSwitch.IsChecked = [bool]$script:config.Enabled
             $script:ui.AutoDeleteSwitch.IsChecked = [bool]$script:config.AutoDeleteOnCopy
             $script:ui.StartupSwitch.IsChecked = Test-Path -LiteralPath $startupLink
@@ -1249,11 +1278,14 @@ try {
             foreach ($theme in @('System','Light','Dark')) {
                 $script:ui["Theme$theme"].IsChecked = [string]$script:config.ThemeMode -eq $theme
             }
+            foreach ($language in @('Auto','Ru','En')) {
+                $script:ui["Language$language"].IsChecked = [string]$script:config.LanguageMode -eq $language
+            }
             $activeColor = if ($script:config.Enabled) { '#19A878' } else { '#90939B' }
             $script:ui.StatusDot.Fill = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($activeColor))
         }
         if ($script:quickMenu) {
-            $script:quickUI.QuickStatus.Text = if ($script:config.Enabled) { 'Работает в фоне' } else { 'На паузе' }
+            $script:quickUI.QuickStatus.Text = if ($script:config.Enabled) { Translate-UI 'Работает в фоне' } else { Translate-UI 'На паузе' }
             $activeColor = if ($script:config.Enabled) { '#19A878' } else { '#90939B' }
             $script:quickUI.QuickStatusDot.Fill = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($activeColor))
             $script:quickUI.QuickEnabled.IsChecked = [bool]$script:config.Enabled
@@ -1441,6 +1473,7 @@ try {
         $window.Add_Deactivated({ if (-not $script:isExiting) { $script:quickMenu.Hide() } })
         Sync-UiState
         Apply-Theme
+        Apply-Localization
     }
 
     function Show-QuickMenu {
@@ -1765,6 +1798,14 @@ try {
                 Set-ThemeMode ([string]$sender.Tag)
             })
         }
+        foreach ($language in @('Auto','Ru','En')) {
+            $choice = $script:ui["Language$language"]
+            $choice.Tag = $language
+            $choice.Add_Click({
+                param($sender, $eventArgs)
+                Set-LanguageMode ([string]$sender.Tag)
+            })
+        }
         $script:saveFolderPath = {
             try {
                 $folder = Resolve-ScreenshotFolder ([string]$script:ui.FolderPathInput.Text)
@@ -1789,7 +1830,7 @@ try {
         $script:ui.FolderButton.Add_Click({
             try {
                 $owner = [System.Windows.Interop.WindowInteropHelper]::new($script:settingsForm).Handle
-                $picked = [SnipUI.FolderPicker]::Pick($owner, [string]$script:shotFolder)
+                $picked = [SnipUI.FolderPicker]::Pick($owner, [string]$script:shotFolder, (Translate-UI 'Выбрать папку для PNG'))
                 if ($picked) { $script:ui.FolderPathInput.Text = $picked; & $script:saveFolderPath }
             }
             catch {
@@ -1811,6 +1852,7 @@ try {
             if (-not $script:isExiting) { $e.Cancel = $true; $sender.Hide() }
         })
         Apply-Theme
+        Apply-Localization
         Sync-UiState
     }
 
