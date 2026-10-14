@@ -1572,6 +1572,33 @@ try {
             <Setter Property="Padding" Value="15"/>
             <Setter Property="Margin" Value="0,0,0,15"/>
         </Style>
+        <Style x:Key="RoundedInput" TargetType="TextBox">
+            <Setter Property="Background" Value="{DynamicResource AltBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="InputChrome" CornerRadius="8"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="InputChrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="InputChrome" Property="Opacity" Value="0.55"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style x:Key="Switch" TargetType="ToggleButton">
             <Setter Property="Width" Value="46"/><Setter Property="Height" Value="26"/>
             <Setter Property="Focusable" Value="True"/><Setter Property="Cursor" Value="Hand"/>
@@ -1646,7 +1673,7 @@ try {
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <Grid Margin="24,19,24,6">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                 <Grid Grid.Row="0" Grid.ColumnSpan="3" Margin="2,0,2,20">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                     <Image x:Name="HeaderIcon" Width="38" Height="38" Margin="0,0,11,0"/>
@@ -1686,9 +1713,8 @@ try {
                             <Border Background="{DynamicResource LineBrush}" Height="1" Margin="0,12"/>
                             <TextBlock Text="Задержка удаления, секунд" FontWeight="SemiBold" Margin="0,0,0,7"/>
                             <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                <TextBox x:Name="DeleteDelayInput" Grid.Column="0" Height="35" FontSize="13" Padding="10,6"
-                                         BorderBrush="{DynamicResource LineBrush}" Background="{DynamicResource AltBrush}"
-                                         Foreground="{DynamicResource TextBrush}" VerticalContentAlignment="Center"/>
+                                <TextBox x:Name="DeleteDelayInput" Grid.Column="0" Height="35" FontSize="13"
+                                         Style="{StaticResource RoundedInput}" VerticalContentAlignment="Center"/>
                                 <Button x:Name="SaveDelayButton" Grid.Column="1" Content="Применить" Height="35"
                                         Margin="8,0,0,0" Style="{StaticResource SoftButton}"/>
                             </Grid>
@@ -1715,9 +1741,8 @@ try {
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
                             <TextBlock Text="Папка PNG" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                            <TextBox x:Name="FolderPathInput" Height="35" FontSize="11.5" Padding="9,5" VerticalContentAlignment="Center"
-                                     BorderBrush="{DynamicResource LineBrush}" Background="{DynamicResource AltBrush}"
-                                     Foreground="{DynamicResource TextBrush}"/>
+                            <TextBox x:Name="FolderPathInput" Height="35" FontSize="11.5"
+                                     Style="{StaticResource RoundedInput}" VerticalContentAlignment="Center"/>
                             <Grid Margin="0,8,0,0">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                 <Button x:Name="FolderButton" Grid.Column="1" Content="Обзор…" Height="32" Style="{StaticResource SoftButton}" Margin="0,0,6,0"/>
@@ -1725,23 +1750,33 @@ try {
                             </Grid>
                         </StackPanel>
                     </Border>
+                </StackPanel>
+                <StackPanel Grid.Row="2" Grid.ColumnSpan="3">
                     <TextBlock Text="Внешний вид" Style="{StaticResource Section}"/>
-                    <Border Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock Text="Тема" FontWeight="SemiBold" Margin="0,0,0,9"/>
-                            <StackPanel Orientation="Horizontal">
-                                <ToggleButton x:Name="ThemeSystem" Content="Системная" Style="{StaticResource Choice}" MinWidth="92"/>
-                                <ToggleButton x:Name="ThemeLight" Content="Светлая" Style="{StaticResource Choice}" MinWidth="77"/>
-                                <ToggleButton x:Name="ThemeDark" Content="Тёмная" Style="{StaticResource Choice}" MinWidth="72" Margin="0"/>
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,4">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="20"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Тема" FontWeight="SemiBold" Margin="0,0,0,9"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <ToggleButton x:Name="ThemeSystem" Content="Системная" Style="{StaticResource Choice}" MinWidth="92"/>
+                                    <ToggleButton x:Name="ThemeLight" Content="Светлая" Style="{StaticResource Choice}" MinWidth="77"/>
+                                    <ToggleButton x:Name="ThemeDark" Content="Тёмная" Style="{StaticResource Choice}" MinWidth="72" Margin="0"/>
+                                </StackPanel>
                             </StackPanel>
-                            <Border Height="1" Background="{DynamicResource LineBrush}" Margin="0,13,0,11"/>
-                            <TextBlock Text="Язык" FontWeight="SemiBold" Margin="0,0,0,9"/>
-                            <StackPanel Orientation="Horizontal">
-                                <ToggleButton x:Name="LanguageAuto" Content="Как в Windows" Style="{StaticResource Choice}" MinWidth="112"/>
-                                <ToggleButton x:Name="LanguageRu" Content="Русский" Style="{StaticResource Choice}" MinWidth="73"/>
-                                <ToggleButton x:Name="LanguageEn" Content="English" Style="{StaticResource Choice}" MinWidth="71" Margin="0"/>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Язык" FontWeight="SemiBold" Margin="0,0,0,9"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <ToggleButton x:Name="LanguageAuto" Content="Как в Windows" Style="{StaticResource Choice}" MinWidth="112"/>
+                                    <ToggleButton x:Name="LanguageRu" Content="Русский" Style="{StaticResource Choice}" MinWidth="73"/>
+                                    <ToggleButton x:Name="LanguageEn" Content="English" Style="{StaticResource Choice}" MinWidth="71" Margin="0"/>
+                                </StackPanel>
                             </StackPanel>
-                        </StackPanel>
+                        </Grid>
                     </Border>
                 </StackPanel>
             </Grid>
