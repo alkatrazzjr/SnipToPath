@@ -1536,7 +1536,9 @@ try {
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="SnipToPath — Настройки" Width="720" Height="720" MinWidth="670" MinHeight="555"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource PageBrush}"
-        FontFamily="Segoe UI" FontSize="13" ShowInTaskbar="True">
+        FontFamily="Segoe UI" FontSize="13" ShowInTaskbar="True"
+        UseLayoutRounding="True" SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display">
     <Window.Resources>
         <SolidColorBrush x:Key="PageBrush" Color="#F3F3F3"/>
         <SolidColorBrush x:Key="CardBrush" Color="#FFFFFF"/>
@@ -1572,32 +1574,29 @@ try {
             <Setter Property="Padding" Value="15"/>
             <Setter Property="Margin" Value="0,0,0,15"/>
         </Style>
+        <!-- Keep WPF's stock TextBox template and its text layout / caret / IME.
+             The previous custom PART_ContentHost ScrollViewer clipped glyphs. -->
         <Style x:Key="RoundedInput" TargetType="TextBox">
-            <Setter Property="Background" Value="{DynamicResource AltBrush}"/>
+            <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="10,0"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+        </Style>
+        <Style x:Key="InputFrame" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource AltBrush}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="10,6"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="TextBox">
-                        <Border x:Name="InputChrome" CornerRadius="8"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}">
-                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                                <Setter TargetName="InputChrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="InputChrome" Property="Opacity" Value="0.55"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Style.Triggers>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.55"/>
+                </Trigger>
+            </Style.Triggers>
         </Style>
         <Style x:Key="Switch" TargetType="ToggleButton">
             <Setter Property="Width" Value="46"/><Setter Property="Height" Value="26"/>
@@ -1713,8 +1712,10 @@ try {
                             <Border Background="{DynamicResource LineBrush}" Height="1" Margin="0,12"/>
                             <TextBlock Text="Задержка удаления, секунд" FontWeight="SemiBold" Margin="0,0,0,7"/>
                             <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                <TextBox x:Name="DeleteDelayInput" Grid.Column="0" Height="35" FontSize="13"
-                                         Style="{StaticResource RoundedInput}" VerticalContentAlignment="Center"/>
+                                <Border Grid.Column="0" Height="35" Style="{StaticResource InputFrame}">
+                                    <TextBox x:Name="DeleteDelayInput" FontSize="13" Height="33"
+                                             Style="{StaticResource RoundedInput}"/>
+                                </Border>
                                 <Button x:Name="SaveDelayButton" Grid.Column="1" Content="Применить" Height="35"
                                         Margin="8,0,0,0" Style="{StaticResource SoftButton}"/>
                             </Grid>
@@ -1741,8 +1742,10 @@ try {
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
                             <TextBlock Text="Папка PNG" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                            <TextBox x:Name="FolderPathInput" Height="35" FontSize="11.5"
-                                     Style="{StaticResource RoundedInput}" VerticalContentAlignment="Center"/>
+                            <Border Height="35" Style="{StaticResource InputFrame}">
+                                <TextBox x:Name="FolderPathInput" FontSize="12" Height="33"
+                                         Style="{StaticResource RoundedInput}"/>
+                            </Border>
                             <Grid Margin="0,8,0,0">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                 <Button x:Name="FolderButton" Grid.Column="1" Content="Обзор…" Height="32" Style="{StaticResource SoftButton}" Margin="0,0,6,0"/>
