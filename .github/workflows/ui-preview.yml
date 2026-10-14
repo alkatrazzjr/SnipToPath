@@ -38,6 +38,11 @@ jobs:
                 $script:config = @{ LanguageMode = $lang }
                 $w = [Windows.Markup.XamlReader]::Parse($m.Groups[1].Value)
                 Update-WpfLanguage $w
+                # Previews must show real input values; empty textboxes hid clipping.
+                if ($windowType -eq 'xaml') {
+                  $w.FindName('DeleteDelayInput').Text = '300'
+                  $w.FindName('FolderPathInput').Text = 'C:\Users\Demo\AppData\Local\Temp\SnipToPath'
+                }
               $palette = if ($dark) { @{
                 PageBrush = '#17181A'; CardBrush = '#242529'; AltBrush = '#303136'
                 TextBrush = '#F7F7F7'; SubtleBrush = '#B6B9C3'; LineBrush = '#414349'
