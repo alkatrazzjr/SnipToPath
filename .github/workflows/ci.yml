@@ -1,0 +1,36 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  static-checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PowerShell 5.1 syntax and assets
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($file in @('SnipToPath.ps1', 'install.ps1', 'uninstall.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors)
+            if ($errors.Count) {
+              $errors | ForEach-Object { Write-Error "${file}: $_" }
+              throw "PowerShell parse failed: $file"
+            }
+            Write-Host "PASS PowerShell parsing: $file"
+          }
+          $source = Get-Content .\SnipToPath.ps1 -Raw -Encoding UTF8
+          $m = [regex]::Match($source, '(?s)\$xaml\s*=\s*@''\r?\n(.*?)\r?\n''@')
+          if (-not $m.Success) { throw 'XAML block missing' }
+          [xml]$xaml = $m.Groups[1].Value
+          if (-not $xaml.DocumentElement.LocalName.Equals('Window')) { throw 'Invalid WPF root' }
+          Write-Host 'PASS XAML XML structure'
+          $icon = [IO.File]::ReadAllBytes((Resolve-Path .\assets\SnipToPath.ico))
+          if ($icon.Length -lt 256 -or $icon[0] -ne 0 -or $icon[1] -ne 0 -or $icon[2] -ne 1 -or $icon[3] -ne 0) {
+            throw 'Invalid ICO header'
+          }
+          Write-Host 'PASS icon header'

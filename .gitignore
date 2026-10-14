@@ -1,0 +1,13 @@
+# Local/temporary data
+*.log
+*.tmp
+settings.json
+SnipToPath.vbs
+*.lnk
+snip-*.png
+
+# Releases/builds
+*.zip
+SHA256SUMS.txt
+.DS_Store
+.vscode/

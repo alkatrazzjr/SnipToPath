@@ -1,0 +1,25 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package scripts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Compress-Archive -Path SnipToPath.ps1, install.ps1, uninstall.ps1, README.md, LICENSE, assets/SnipToPath.ico -DestinationPath "SnipToPath-${{ github.ref_name }}.zip" -Force
+          $zip = "SnipToPath-${{ github.ref_name }}.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+          "$hash  $zip" | Set-Content -Path SHA256SUMS.txt -Encoding ascii
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          gh release create '${{ github.ref_name }}' "SnipToPath-${{ github.ref_name }}.zip" SHA256SUMS.txt --title 'SnipToPath ${{ github.ref_name }}' --generate-notes --verify-tag

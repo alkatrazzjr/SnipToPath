@@ -1,0 +1,18 @@
+# SnipToPath online installer. Run in Windows PowerShell (without admin permissions).
+[CmdletBinding()]
+param([ValidatePattern('^[A-Za-z0-9._/-]+$')][string]$Ref = 'main')
+$ErrorActionPreference = 'Stop'
+if ($env:OS -ne 'Windows_NT') { throw 'SnipToPath requires Windows 10/11.' }
+$download = Join-Path ([IO.Path]::GetTempPath()) ('SnipToPath-install-{0}.ps1' -f [guid]::NewGuid().ToString('N'))
+$uri = "https://raw.githubusercontent.com/alkatrazzjr/SnipToPath/$Ref/SnipToPath.ps1"
+try {
+    Write-Host "Downloading SnipToPath from $uri ..."
+    Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $download -ErrorAction Stop
+    if ((Get-Item -LiteralPath $download).Length -lt 10000) { throw 'Unexpected download contents.' }
+    $shell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    & $shell -NoProfile -ExecutionPolicy Bypass -File $download
+    if ($LASTEXITCODE -ne 0) { throw "SnipToPath setup exited with code $LASTEXITCODE." }
+}
+finally {
+    Remove-Item -LiteralPath $download -Force -ErrorAction SilentlyContinue
+}
