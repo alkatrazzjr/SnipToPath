@@ -137,6 +137,28 @@ finally {
     }
 }
 
+# Existing users store deletion delay in minutes; upgrade must preserve it.
+foreach ($name in @('Get-Defaults', 'Load-Settings')) {
+    $defs = @($ast.FindAll({ param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+    }, $true))
+    if ($defs.Count -ne 1) { throw "Missing settings function: $name" }
+    Invoke-Expression $defs[0].Extent.Text
+}
+$settingsTestRoot = Join-Path ([IO.Path]::GetTempPath()) ('sniptopath-migration-' + [Guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory($settingsTestRoot)
+$settingsPath = Join-Path $settingsTestRoot 'settings.json'
+try {
+    [IO.File]::WriteAllText($settingsPath, '{"DeleteDelayMinutes":15}', [Text.Encoding]::UTF8)
+    Load-Settings
+    if ([int]$script:config.DeleteDelaySeconds -ne 900) { throw 'Old minute delay was not migrated' }
+    [IO.File]::WriteAllText($settingsPath, '{"DeleteDelayMinutes":15,"DeleteDelaySeconds":48}', [Text.Encoding]::UTF8)
+    Load-Settings
+    if ([int]$script:config.DeleteDelaySeconds -ne 48) { throw 'New custom second delay was overridden' }
+    Write-Host 'PASS settings migration preserves existing deletion times'
+}
+finally { Remove-Item -LiteralPath $settingsTestRoot -Recurse -Force -ErrorAction SilentlyContinue }
+
 # Layout calculations run in native screen coordinates, not WPF DIPs.
 Add-Type -AssemblyName System.Drawing
 $cases = @(
