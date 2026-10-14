@@ -43,7 +43,7 @@ foreach ($lang in @('ru', 'en')) {
             $viewer = $scroll[0]
             $overflowY = [Math]::Max(0, $viewer.ExtentHeight - $viewer.ViewportHeight)
             $overflowX = [Math]::Max(0, $viewer.ExtentWidth - $viewer.ViewportWidth)
-            Write-Host ("Layout {0} at {1}px client width: viewport={1:N1}x{2:N1}, extent={3:N1}x{4:N1}, overflow={5:N1}x{6:N1}" -f
+            Write-Host ("Layout {0} at {1}px client width: viewport={2:N1}x{3:N1}, extent={4:N1}x{5:N1}, overflow={6:N1}x{7:N1}" -f
                 $lang,$width,$viewer.ViewportWidth,$viewer.ViewportHeight,$viewer.ExtentWidth,$viewer.ExtentHeight,
                 $overflowX,$overflowY)
             if ($overflowY -gt 1.5) { throw "Settings require scrolling at the default window size (width $width)" }
