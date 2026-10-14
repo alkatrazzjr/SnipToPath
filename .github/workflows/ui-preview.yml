@@ -49,7 +49,9 @@ jobs:
                 $w.Resources[$name] = [Windows.Media.SolidColorBrush]::new($color)
               }
               $width = if ($windowType -eq 'xaml') { 720 } else { 336 }
-              $height = if ($windowType -eq 'xaml') { 706 } else { 330 }
+              # Render the settings CLIENT area, excluding about 32 px of Windows title bar.
+              # The old 706px test was too tall and hid the scrollbar bug at 720px window height.
+              $height = if ($windowType -eq 'xaml') { 688 } else { 330 }
               $visual = $w.Content
               $size = [Windows.Size]::new($width, $height)
               $visual.Measure($size)
