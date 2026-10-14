@@ -1,4 +1,4 @@
-﻿# SnipToPath — Snipping Tool clipboard images -> temporary PNG -> pasteable file path.
+# SnipToPath — Snipping Tool clipboard images -> temporary PNG -> pasteable file path.
 # Windows 10/11, built-in Windows PowerShell 5.1 + Windows Forms; no external software.
 # Run this file without arguments to install/update, create a Start Menu shortcut, and launch.
 # Run the installed file with -Uninstall for complete removal.
@@ -24,6 +24,7 @@ function Get-Defaults {
     return [ordered]@{
         Enabled        = $true
         StartCleanup   = $true
+        AutoDeleteOnCopy = $true
         QuotedPaths    = $true
         ThemeMode      = 'System'
         ScreenshotDir  = (Join-Path $env:TEMP 'SnipToPath')
@@ -35,7 +36,7 @@ function Load-Settings {
     if (Test-Path -LiteralPath $settingsPath) {
         try {
             $previous = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($key in @('Enabled', 'StartCleanup', 'QuotedPaths', 'ScreenshotDir', 'ThemeMode')) {
+            foreach ($key in @('Enabled', 'StartCleanup', 'AutoDeleteOnCopy', 'QuotedPaths', 'ScreenshotDir', 'ThemeMode')) {
                 if ($null -ne $previous.PSObject.Properties[$key] -and $null -ne $previous.$key) {
                     $script:config[$key] = $previous.$key
                 }
@@ -381,6 +382,8 @@ try {
     New-Item -ItemType Directory -Path $script:shotFolder -Force | Out-Null
     if ($script:config.StartCleanup) { $null = Remove-OwnScreenshots $script:shotFolder }
     $script:lastSeq = [SnipNative.ClipboardCounter]::GetClipboardSequenceNumber()
+    $script:lastScreenshotPath = $null
+    $script:pendingScreenshotDeletes = New-Object 'System.Collections.Generic.List[object]'
 
     if (Test-Path -LiteralPath $iconPath) {
         $script:icon = [System.Drawing.Icon]::new($iconPath)
@@ -403,6 +406,8 @@ try {
     $script:menuPause.CheckOnClick = $true
     $script:menuStartup = [System.Windows.Forms.ToolStripMenuItem]::new('Запускать с Windows')
     $script:menuStartup.CheckOnClick = $true
+    $script:menuAutoDelete = [System.Windows.Forms.ToolStripMenuItem]::new('Удалять PNG после смены буфера')
+    $script:menuAutoDelete.CheckOnClick = $true
     $script:menuTheme = [System.Windows.Forms.ToolStripMenuItem]::new('Тема приложения')
     $script:menuThemeSystem = [System.Windows.Forms.ToolStripMenuItem]::new('Как в Windows')
     $script:menuThemeLight = [System.Windows.Forms.ToolStripMenuItem]::new('Светлая')
@@ -414,7 +419,7 @@ try {
     $script:menuClear = [System.Windows.Forms.ToolStripMenuItem]::new('Удалить временные PNG')
     $script:menuExit = [System.Windows.Forms.ToolStripMenuItem]::new('Выход')
 
-    foreach ($item in @($script:menuSettings, $script:menuPause, $script:menuStartup, $script:menuTheme)) {
+    foreach ($item in @($script:menuSettings, $script:menuPause, $script:menuAutoDelete, $script:menuStartup, $script:menuTheme)) {
         $null = $script:menu.Items.Add($item)
     }
     $null = $script:menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
@@ -503,6 +508,7 @@ try {
 
     function Sync-Menus {
         $script:menuPause.Checked = [bool]$script:config.Enabled
+        $script:menuAutoDelete.Checked = [bool]$script:config.AutoDeleteOnCopy
         $script:menuStartup.Checked = Test-Path -LiteralPath $startupLink
         $script:menuThemeSystem.Checked = [string]$script:config.ThemeMode -eq 'System'
         $script:menuThemeLight.Checked = [string]$script:config.ThemeMode -eq 'Light'
@@ -513,6 +519,40 @@ try {
             $script:ui.StatusHint.Text = if ($script:config.Enabled) {
                 'Скопируйте скриншот и вставьте путь в консоль.'
             } else { 'Отслеживание буфера обмена приостановлено.' }
+        }
+    }
+
+    function Queue-PreviousScreenshot {
+        $path = $script:lastScreenshotPath
+        $script:lastScreenshotPath = $null
+        if (-not $path -or -not [bool]$script:config.AutoDeleteOnCopy) { return }
+        # Give the CLI time to open the PNG. Deleting it immediately on the next copy
+        # could break long-running Codex / Claude tool calls.
+        $script:pendingScreenshotDeletes.Add([pscustomobject]@{
+            Path = $path
+            DeleteAfter = [DateTime]::UtcNow.AddMinutes(5)
+        })
+    }
+
+    function Invoke-PendingScreenshotCleanup {
+        if ($script:pendingScreenshotDeletes.Count -eq 0) { return }
+        if (-not [bool]$script:config.AutoDeleteOnCopy) {
+            $script:pendingScreenshotDeletes.Clear()
+            return
+        }
+        $now = [DateTime]::UtcNow
+        for ($index = $script:pendingScreenshotDeletes.Count - 1; $index -ge 0; $index--) {
+            $pending = $script:pendingScreenshotDeletes[$index]
+            if ($now -lt $pending.DeleteAfter) { continue }
+            try {
+                if (Test-Path -LiteralPath $pending.Path -PathType Leaf) {
+                    Remove-Item -LiteralPath $pending.Path -Force -ErrorAction Stop
+                }
+                $script:pendingScreenshotDeletes.RemoveAt($index)
+            } catch {
+                Write-Log ('Could not delete clipboard screenshot: ' + $_.Exception.Message)
+                $pending.DeleteAfter = $now.AddSeconds(30)
+            }
         }
     }
 
@@ -535,7 +575,7 @@ try {
         $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SnipToPath — Настройки" Width="650" Height="742" MinWidth="600" MinHeight="620"
+        Title="SnipToPath — Настройки" Width="650" Height="770" MinWidth="600" MinHeight="620"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource PageBrush}"
         FontFamily="Segoe UI" FontSize="13" ShowInTaskbar="True">
     <Window.Resources>
@@ -638,6 +678,11 @@ try {
                     </Grid>
                     <Border Background="{DynamicResource LineBrush}" Height="1" Margin="0,15"/>
                     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,16,0"><TextBlock Text="Удалять прошлый скрин после копирования" FontWeight="SemiBold"/><TextBlock Text="Через 5 минут после смены буфера — чтобы агент успел прочитать PNG" Style="{StaticResource Hint}" Margin="0,4,0,0" TextWrapping="Wrap"/></StackPanel>
+                        <ToggleButton x:Name="AutoDeleteSwitch" Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource Switch}"/>
+                    </Grid>
+                    <Border Background="{DynamicResource LineBrush}" Height="1" Margin="0,15"/>
+                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <StackPanel Margin="0,0,16,0"><TextBlock Text="Путь в кавычках" FontWeight="SemiBold"/><TextBlock Text="Удобнее для путей с пробелами" Style="{StaticResource Hint}" Margin="0,4,0,0"/></StackPanel>
                         <ToggleButton x:Name="QuotesSwitch" Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource Switch}"/>
                     </Grid>
@@ -679,11 +724,12 @@ try {
         $window.Icon = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon($script:icon.Handle, [System.Windows.Int32Rect]::Empty, [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
         $script:settingsForm = $window
         $script:ui = @{}
-        foreach ($name in @('StatusName','StatusHint','EnabledSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch','FolderText','FolderButton','ThemeChoice','ClearButton','CloseButton')) {
+        foreach ($name in @('StatusName','StatusHint','EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch','FolderText','FolderButton','ThemeChoice','ClearButton','CloseButton')) {
             $script:ui[$name] = $window.FindName($name)
             if (-not $script:ui[$name]) { throw ('Элемент интерфейса не найден: ' + $name) }
         }
         $script:ui.EnabledSwitch.IsChecked = [bool]$script:config.Enabled
+        $script:ui.AutoDeleteSwitch.IsChecked = [bool]$script:config.AutoDeleteOnCopy
         $script:ui.QuotesSwitch.IsChecked = [bool]$script:config.QuotedPaths
         $script:ui.StartupSwitch.IsChecked = Test-Path -LiteralPath $startupLink
         $script:ui.CleanupSwitch.IsChecked = [bool]$script:config.StartCleanup
@@ -692,6 +738,11 @@ try {
 
         $script:ui.EnabledSwitch.Add_Click({
             $script:config.Enabled = [bool]$script:ui.EnabledSwitch.IsChecked
+            Save-Settings; Sync-Menus
+        })
+        $script:ui.AutoDeleteSwitch.Add_Click({
+            $script:config.AutoDeleteOnCopy = [bool]$script:ui.AutoDeleteSwitch.IsChecked
+            if (-not $script:config.AutoDeleteOnCopy) { $script:pendingScreenshotDeletes.Clear() }
             Save-Settings; Sync-Menus
         })
         $script:ui.QuotesSwitch.Add_Click({
@@ -733,6 +784,8 @@ try {
         })
         $script:ui.ClearButton.Add_Click({
             $deleted = Remove-OwnScreenshots $script:shotFolder
+            $script:lastScreenshotPath = $null
+            $script:pendingScreenshotDeletes.Clear()
             [System.Windows.MessageBox]::Show(('Удалено временных PNG: {0}' -f $deleted), 'SnipToPath', 'OK', 'Information') | Out-Null
         })
         $script:ui.CloseButton.Add_Click({ $script:settingsForm.Hide() })
@@ -771,6 +824,13 @@ try {
         Save-Settings
         Sync-Menus
     })
+    $script:menuAutoDelete.Add_Click({
+        $script:config.AutoDeleteOnCopy = [bool]$script:menuAutoDelete.Checked
+        if (-not $script:config.AutoDeleteOnCopy) { $script:pendingScreenshotDeletes.Clear() }
+        Save-Settings
+        if ($script:settingsForm) { $script:ui.AutoDeleteSwitch.IsChecked = [bool]$script:config.AutoDeleteOnCopy }
+        Sync-Menus
+    })
     $script:menuStartup.Add_Click({
         try { Set-Startup ([bool]$script:menuStartup.Checked) }
         catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Error') | Out-Null }
@@ -782,6 +842,8 @@ try {
     })
     $script:menuClear.Add_Click({
         $deleted = Remove-OwnScreenshots $script:shotFolder
+        $script:lastScreenshotPath = $null
+        $script:pendingScreenshotDeletes.Clear()
         $script:notify.ShowBalloonTip(1500, 'SnipToPath', ("Удалено PNG: {0}" -f $deleted), [System.Windows.Forms.ToolTipIcon]::Info)
     })
     $script:menuExit.Add_Click({ Exit-SnipToPath })
@@ -799,7 +861,12 @@ try {
                 $script:themePoll = 0
                 if ((Get-ThemeState).Signature -ne $script:themeSignature) { Apply-Theme }
             }
+            Invoke-PendingScreenshotCleanup
             $currentSeq = [SnipNative.ClipboardCounter]::GetClipboardSequenceNumber()
+            if ($currentSeq -ne $script:lastSeq) {
+                # External copy (text, image, files, etc.) supersedes our path.
+                Queue-PreviousScreenshot
+            }
             if (-not $script:config.Enabled) {
                 $script:lastSeq = $currentSeq
                 return
@@ -821,6 +888,7 @@ try {
             $clipboardText = if ($script:config.QuotedPaths) { '"' + $filePath + '"' } else { $filePath }
             # Clipboard can be locked by Snipping Tool for a short moment.
             [System.Windows.Forms.Clipboard]::SetText($clipboardText)
+            $script:lastScreenshotPath = $filePath
             $script:lastSeq = [SnipNative.ClipboardCounter]::GetClipboardSequenceNumber()
         }
         catch [System.Runtime.InteropServices.ExternalException] {
