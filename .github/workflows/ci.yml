@@ -13,6 +13,10 @@ jobs:
         shell: powershell
         run: |
           .\tests\core.ps1
+      - name: Windows UI localization tests
+        shell: powershell
+        run: |
+          .\tests\localization.ps1
       - name: Full Windows installation and upgrade
         shell: powershell
         run: |
@@ -21,7 +25,7 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($file in @('SnipToPath.ps1', 'install.ps1', 'uninstall.ps1', 'tests/core.ps1', 'tests/install-e2e.ps1')) {
+          foreach ($file in @('SnipToPath.ps1', 'install.ps1', 'uninstall.ps1', 'tests/core.ps1', 'tests/localization.ps1', 'tests/install-e2e.ps1')) {
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors)
@@ -77,10 +81,11 @@ jobs:
           $settingsWindow = [Windows.Markup.XamlReader]::Parse($mainMatch.Groups[1].Value)
           foreach ($name in @('EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch',
               'DeleteDelayInput','SaveDelayButton','ThemeSystem','ThemeLight','ThemeDark',
+              'LanguageAuto','LanguageRu','LanguageEn',
               'OpenFolderButton','ClearButton','CloseButton','FolderButton','SaveFolderButton','FolderPathInput','StatusDot')) {
             if (-not $settingsWindow.FindName($name)) { throw "Missing UI control: $name" }
           }
-          if ($settingsWindow.Height -gt 700 -or $settingsWindow.Width -gt 760) { throw 'Settings window must be compact' }
+          if ($settingsWindow.Height -gt 740 -or $settingsWindow.Width -gt 760) { throw 'Settings window must be compact' }
           $section = $settingsWindow.Resources['Section']
           if (-not ($section.Setters | Where-Object { $_.Property.Name -eq 'Foreground' })) {
             throw 'Section foreground must follow Windows theme'
