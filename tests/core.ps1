@@ -5,7 +5,7 @@ $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Application source has parse errors' }
 
-foreach ($name in @('Remove-OwnScreenshots', 'Queue-PreviousScreenshot', 'Invoke-PendingScreenshotCleanup')) {
+foreach ($name in @('Remove-OwnScreenshots', 'Queue-PreviousScreenshot', 'Invoke-PendingScreenshotCleanup', 'Install-ScriptSafely')) {
     $defs = @($ast.FindAll({ param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
     }, $true))
@@ -84,3 +84,55 @@ try {
     }
 }
 finally { $owner.Dispose() }
+
+# Exercise the actual updater helper on Windows, not a copy of the Replace call.
+# This catches .NET Framework's ArgumentException when backupFileName is $null.
+$installRoot = Join-Path ([IO.Path]::GetTempPath()) ('SnipToPath installation test ' + [Guid]::NewGuid().ToString('N'))
+$sourcePath = Join-Path $installRoot 'downloaded.ps1'
+$installedPath = Join-Path $installRoot 'installed\SnipToPath.ps1'
+try {
+    [void][IO.Directory]::CreateDirectory($installRoot)
+    [IO.File]::WriteAllText($sourcePath, 'first version', [Text.Encoding]::UTF8)
+
+    # Fresh installation must work when no destination file exists.
+    Install-ScriptSafely $sourcePath $installedPath
+    if ([IO.File]::ReadAllText($installedPath) -ne 'first version') {
+        throw 'Fresh install did not write the downloaded script'
+    }
+    Write-Host 'PASS fresh installation into an empty folder'
+
+    # An existing installation must be atomically replaced without an invalid backup path.
+    [IO.File]::WriteAllText($sourcePath, 'updated version', [Text.Encoding]::UTF8)
+    Install-ScriptSafely $sourcePath $installedPath
+    if ([IO.File]::ReadAllText($installedPath) -ne 'updated version') {
+        throw 'Update did not replace existing installed script'
+    }
+    $leftovers = @(Get-ChildItem (Split-Path -Parent $installedPath) -File |
+        Where-Object { $_.Name -match '^SnipToPath-[a-f0-9]{32}\.(tmp|bak)$' })
+    if ($leftovers.Count) { throw 'Installation left temporary or backup files behind' }
+    Write-Host 'PASS updating an existing installation with a real backup path'
+
+    # Re-running from its own installed path should do nothing.
+    Install-ScriptSafely $installedPath $installedPath
+    if ([IO.File]::ReadAllText($installedPath) -ne 'updated version') {
+        throw 'Self-update unexpectedly modified the installed script'
+    }
+    Write-Host 'PASS installing from the installed script path'
+
+    # A missing downloaded file must not damage the previously working version.
+    try {
+        Install-ScriptSafely (Join-Path $installRoot 'missing.ps1') $installedPath
+        throw 'Expected missing source to fail'
+    }
+    catch [System.IO.FileNotFoundException] {
+        if ([IO.File]::ReadAllText($installedPath) -ne 'updated version') {
+            throw 'Failed update corrupted previous installation'
+        }
+    }
+    Write-Host 'PASS failed update preserves the installed version'
+}
+finally {
+    if (Test-Path -LiteralPath $installRoot) {
+        Remove-Item -LiteralPath $installRoot -Force -Recurse
+    }
+}
