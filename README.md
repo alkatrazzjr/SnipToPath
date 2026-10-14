@@ -1,6 +1,6 @@
 <div align="center">
   <h1>✂️ SnipToPath</h1>
-  <p><strong>Скриншот → путь в буфере → Ctrl+V в Codex CLI / Claude Code.</strong></p>
+  <p><strong>Скриншот → путь в буфере → Ctrl+V в Codex CLI или Claude Code CLI.</strong></p>
   <p>Лёгкая утилита для Windows 10/11 на встроенных PowerShell, WPF и WinForms. Без сторонних зависимостей и фоновой отправки данных.</p>
 
   [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows11&logoColor=white)](https://github.com/alkatrazzjr/SnipToPath)
@@ -20,9 +20,26 @@ Win + Shift + S  →  выделить область  →  PNG в %TEMP%\SnipTo
 
 **Пример:** После снимка в буфере будет не изображение, а текстовый путь вроде
 `"C:\Users\you\AppData\Local\Temp\SnipToPath\snip-20261014-023000-123-a1b2c3.png"`.
-В уже открытом Codex или Claude можно написать: `Посмотри скрин "C:\...\snip-....png" и исправь отступы.`
+Его можно вставить прямо в запрос уже открытого CLI-агента.
 
-> Некоторые терминалы перехватывают Ctrl+V особым образом. Если не вставляется именно текстовый путь, попробуйте Ctrl+Shift+V. Приложение не прикрепляет изображение как нативное вложение — AI CLI должен уметь читать локальный PNG.
+> **Важно:** SnipToPath не прикрепляет PNG к сообщению как встроенное изображение. Утилита вставляет **только путь к локальному файлу**; Codex CLI или Claude Code CLI должен иметь доступ к этому пути и самостоятельно открыть изображение. Некоторые терминалы перехватывают `Ctrl+V`: для вставки **текста** попробуйте `Ctrl+Shift+V`.
+
+## Работа с Codex CLI и Claude Code CLI
+
+Здесь речь именно об **интерактивных консольных приложениях**, а не о десктопных интерфейсах Codex или Claude.
+
+| CLI-агент | Команда запуска | Пример запроса после вставки пути |
+| --- | --- | --- |
+| **OpenAI Codex CLI** | `codex` | `Посмотри скрин по пути "C:\...\snip-....png" и исправь отступы.` |
+| **Anthropic Claude Code CLI** | `claude` | `Открой изображение "C:\...\snip-....png" и проверь интерфейс.` |
+
+Название **Claude Code** — официальное; приписка *CLI* в этом README уточняет способ работы через терминал.
+
+**Процесс для обоих агентов:** сделайте `Win + Shift + S`, выделите область, дождитесь преобразования буфера, вставьте путь в текущий запрос через `Ctrl+V` (или `Ctrl+Shift+V`) и отправьте сообщение.
+
+- Вставка пути **не гарантирует**, что агент прочитает изображение: его среда должна иметь доступ к файлу и возможность открывать локальные PNG.
+- Для работы из **WSL** Windows-путь вида `C:\...` может потребовать преобразования в `/mnt/c/...`; автоматического преобразования для WSL пока нет.
+- При нескольких снимках можно последовательно вставлять пути в один запрос. Файлы сохраняются отдельно, пока вы не очистите папку.
 
 ## Установка (Windows PowerShell)
 
@@ -83,12 +100,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\SnipT
 
 ## English
 
-SnipToPath is a small Windows utility that saves clipboard images to temporary PNG files and replaces the clipboard content with a pasteable file path. Intended for frequent screenshots in terminal AI assistants such as Codex CLI and Claude Code. Built with Windows PowerShell, WPF and WinForms; no third-party dependencies. See the Russian guide above for installation, usage, and privacy notes.
+SnipToPath is a small Windows utility that saves clipboard images to temporary PNG files and replaces the clipboard content with a pasteable file path. Intended for frequent screenshots in interactive terminal agents such as OpenAI Codex CLI (`codex`) and Anthropic Claude Code CLI (`claude`). It pastes a local PNG file path, not a native image attachment. Built with Windows PowerShell, WPF and WinForms; no third-party dependencies. See the Russian guide above for installation, usage, and privacy notes.
 
 ## Лицензия
 
 [MIT](LICENSE) © 2026 alkatrazzjr.
 
-### Публикация своего форка / подготовленного проекта
+### Выпуск версии (для сопровождающих)
 
-Файл `publish.ps1` нужен только владельцу исходного репозитория при **первой** публикации: он проверяет вход в `gh` как `alkatrazzjr`, инициализирует Git, создаёт публичный репозиторий и загружает файлы. Не запускайте его повторно в уже опубликованном проекте. Для релиза после реального теста на Windows: `git tag v0.1.0; git push origin v0.1.0`.
+После проверки программы на настоящей Windows-сессии создайте тег `v*`: workflow `release.yml` соберёт ZIP-архив и контрольную сумму. Файл `publish.ps1` сохранён как вспомогательный скрипт первоначальной публикации; обычным пользователям он не нужен.
