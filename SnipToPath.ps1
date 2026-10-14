@@ -74,6 +74,29 @@ function Write-Log([string]$message) {
     catch {}
 }
 
+
+function Resolve-ScreenshotFolder([string]$candidate) {
+    if ([string]::IsNullOrWhiteSpace($candidate)) { throw 'Укажи папку для сохранения PNG.' }
+    $expanded = [Environment]::ExpandEnvironmentVariables($candidate.Trim().Trim('"'))
+    if (-not [IO.Path]::IsPathRooted($expanded)) { throw 'Укажи полный путь к папке.' }
+    $full = [IO.Path]::GetFullPath($expanded)
+    if ([IO.File]::Exists($full)) { throw 'По этому пути находится файл, а не папка.' }
+    [void][IO.Directory]::CreateDirectory($full)
+    $testFile = Join-Path $full ('.sniptopath-write-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    try { [IO.File]::WriteAllBytes($testFile, [byte[]](1)) }
+    finally { if ([IO.File]::Exists($testFile)) { [IO.File]::Delete($testFile) } }
+    return $full
+}
+
+function ConvertTo-DelaySeconds([string]$value) {
+    if ($value -notmatch '^[0-9]{1,7}$') { throw 'Укажи целое число секунд.' }
+    $parsed = 0
+    if (-not [int]::TryParse($value, [ref]$parsed) -or $parsed -lt 1 -or $parsed -gt 604800) {
+        throw 'Можно указать от 1 до 604800 секунд (7 дней).'
+    }
+    return $parsed
+}
+
 function Remove-OwnScreenshots([string]$folder) {
     if ([string]::IsNullOrWhiteSpace($folder) -or -not (Test-Path -LiteralPath $folder -PathType Container)) { return 0 }
     $count = 0
@@ -938,6 +961,73 @@ namespace SnipUI {
         public const uint NoZOrder = 0x0004;
         public const uint NoActivate = 0x0010;
     }
+    [ComImport, Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")]
+    public class FileOpenDialogClass { }
+    [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IShellItem {
+        void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
+        void GetParent(out IShellItem parent);
+        void GetDisplayName(uint name, out IntPtr value);
+        void GetAttributes(uint mask, out uint attributes);
+        void Compare(IShellItem other, uint hint, out int order);
+    }
+    [ComImport, Guid("D57C7288-D4AD-4768-BE02-9D969532D960"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IFileOpenDialog {
+        [PreserveSig] int Show(IntPtr parent);
+        void SetFileTypes(uint count, IntPtr types);
+        void SetFileTypeIndex(uint index);
+        void GetFileTypeIndex(out uint index);
+        void Advise(IntPtr events, out uint cookie);
+        void Unadvise(uint cookie);
+        void SetOptions(uint options);
+        void GetOptions(out uint options);
+        void SetDefaultFolder(IShellItem item);
+        void SetFolder(IShellItem item);
+        void GetFolder(out IShellItem item);
+        void GetCurrentSelection(out IShellItem item);
+        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string name);
+        void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string name);
+        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string title);
+        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+        void GetResult(out IShellItem item);
+    }
+    public static class FolderPicker {
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
+        private static extern int SHCreateItemFromParsingName(
+            [MarshalAs(UnmanagedType.LPWStr)] string path, IntPtr pbc, ref Guid iid,
+            [MarshalAs(UnmanagedType.Interface)] out IShellItem result);
+        public static string Pick(IntPtr owner, string initialFolder) {
+            IFileOpenDialog dialog = (IFileOpenDialog)new FileOpenDialogClass();
+            try {
+                uint options;
+                dialog.GetOptions(out options);
+                dialog.SetOptions(options | 0x20u | 0x40u | 0x800u);
+                dialog.SetTitle("Выбрать папку для PNG");
+                if (!String.IsNullOrWhiteSpace(initialFolder) && System.IO.Directory.Exists(initialFolder)) {
+                    IShellItem initial = null;
+                    Guid iid = typeof(IShellItem).GUID;
+                    if (SHCreateItemFromParsingName(initialFolder, IntPtr.Zero, ref iid, out initial) >= 0) {
+                        try { dialog.SetFolder(initial); }
+                        finally { if (initial != null) Marshal.ReleaseComObject(initial); }
+                    }
+                }
+                int hr = dialog.Show(owner);
+                if (hr == unchecked((int)0x800704C7)) return null;
+                if (hr < 0) Marshal.ThrowExceptionForHR(hr);
+                IShellItem selected;
+                dialog.GetResult(out selected);
+                try {
+                    IntPtr nativePath;
+                    selected.GetDisplayName(0x80058000u, out nativePath);
+                    try { return Marshal.PtrToStringUni(nativePath); }
+                    finally { Marshal.FreeCoTaskMem(nativePath); }
+                }
+                finally { Marshal.ReleaseComObject(selected); }
+            }
+            finally { Marshal.ReleaseComObject(dialog); }
+        }
+    }
 }
 '@ -ReferencedAssemblies 'System.Drawing', 'System.Windows.Forms'
 
@@ -1151,7 +1241,7 @@ try {
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Width="336" SizeToContent="Height" WindowStyle="None" AllowsTransparency="True"
-        ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True" Background="Transparent"
+        ResizeMode="NoResize" ShowInTaskbar="False" ShowActivated="False" Topmost="True" Background="Transparent"
         WindowStartupLocation="Manual" FontFamily="Segoe UI" FontSize="13">
     <Window.Resources>
         <SolidColorBrush x:Key="CardBrush" Color="#FFFFFF"/>
