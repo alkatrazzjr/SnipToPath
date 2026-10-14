@@ -5,7 +5,8 @@
 [CmdletBinding()]
 param(
     [switch]$Tray,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$NoLaunch
 )
 
 $ErrorActionPreference = 'Stop'
@@ -112,8 +113,8 @@ function Stop-InstalledInstances {
 }
 
 function Install-ScriptSafely([string]$sourcePath, [string]$destinationPath) {
-    # Windows PowerShell 5.1 uses .NET Framework: File.Replace requires a real
-    # backup filename here. Passing $null throws "The path is not of a legal form".
+    # Keep a rollback copy without using File.Replace. On some Windows 11
+    # machines File.Replace fails with ArgumentException even for valid paths.
     $source = [IO.Path]::GetFullPath($sourcePath)
     $target = [IO.Path]::GetFullPath($destinationPath)
     if ([string]::Equals($source, $target, [StringComparison]::OrdinalIgnoreCase)) { return }
@@ -123,23 +124,32 @@ function Install-ScriptSafely([string]$sourcePath, [string]$destinationPath) {
     $token = [guid]::NewGuid().ToString('N')
     $staged = Join-Path $folder ("SnipToPath-$token.tmp")
     $backup = Join-Path $folder ("SnipToPath-$token.bak")
-    $success = $false
+    $movedOldVersion = $false
+    $installed = $false
 
     try {
         [IO.File]::Copy($source, $staged, $false)
         if ([IO.File]::Exists($target)) {
-            # Keep the old version until the replacement has succeeded.
-            [IO.File]::Replace($staged, $target, $backup)
+            [IO.File]::Move($target, $backup)
+            $movedOldVersion = $true
         }
-        else {
+        try {
             [IO.File]::Move($staged, $target)
+            $installed = $true
         }
-        $success = $true
+        catch {
+            if ($movedOldVersion -and [IO.File]::Exists($backup) -and -not [IO.File]::Exists($target)) {
+                [IO.File]::Move($backup, $target)
+            }
+            throw
+        }
     }
     finally {
         if ([IO.File]::Exists($staged)) { [IO.File]::Delete($staged) }
-        if ($success -and [IO.File]::Exists($backup)) { [IO.File]::Delete($backup) }
-        # On a failed replacement, leave any backup available for recovery.
+        if ($installed -and [IO.File]::Exists($backup)) {
+            try { [IO.File]::Delete($backup) }
+            catch { Write-Warning "The update succeeded, but could not remove the backup: $backup" }
+        }
     }
 }
 
@@ -828,8 +838,13 @@ SoeyYFVopLZKLU4q5d5X8e64Q3+/Zwjbs2darF+/n860mj5LzubCHyoEALjiCqjTNdxyKGeaEJuamuHH
     # First install: autostart ON. Update: preserve previous ON/OFF choice.
     if (-not $alreadyInstalled -or $previousStartup) { Set-Startup $true }
 
-    Start-Process -FilePath $wscriptExe -ArgumentList ('"{0}"' -f $launcherPath)
-    Write-Host 'SnipToPath installed and launched.' -ForegroundColor Green
+    if (-not $NoLaunch) {
+        Start-Process -FilePath $wscriptExe -ArgumentList ('"{0}"' -f $launcherPath)
+        Write-Host 'SnipToPath installed and launched.' -ForegroundColor Green
+    }
+    else {
+        Write-Host 'SnipToPath installed (launch skipped).' -ForegroundColor Green
+    }
     Write-Host 'Search Windows for: SnipToPath'
     Write-Host 'Right-click its tray icon for quick controls, or double-click for Settings.'
     Write-Host 'Win + Shift + S -> wait a moment -> Ctrl + V in Codex/Claude.'
