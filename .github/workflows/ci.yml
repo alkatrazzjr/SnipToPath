@@ -9,11 +9,15 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Clipboard and cleanup regression tests
+        shell: powershell
+        run: |
+          .\tests\core.ps1
       - name: PowerShell 5.1 syntax and assets
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($file in @('SnipToPath.ps1', 'install.ps1', 'uninstall.ps1')) {
+          foreach ($file in @('SnipToPath.ps1', 'install.ps1', 'uninstall.ps1', 'tests/core.ps1')) {
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors)
