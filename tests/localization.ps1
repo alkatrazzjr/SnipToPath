@@ -65,6 +65,9 @@ foreach ($windowName in @('xaml','quickXaml')) {
         }
         else {
             if ($window.FindName('QuickSettings').Content -ne 'Settings') { throw 'Tray settings not localized' }
+            if ($window.FindName('QuickOpenFolder').Content -ne 'Open PNG folder') {
+                throw 'Tray screenshot folder action not localized'
+            }
             if ($window.FindName('QuickEnabled').Content.Children[0].Text -ne 'Process images') {
                 throw 'Tray nested label not translated'
             }
@@ -77,6 +80,9 @@ foreach ($windowName in @('xaml','quickXaml')) {
         }
         else {
             if ($window.FindName('QuickSettings').Content -ne 'Настройки') { throw 'Tray settings not restored to Russian' }
+            if ($window.FindName('QuickOpenFolder').Content -ne 'Открыть папку PNG') {
+                throw 'Tray screenshot folder action not restored to Russian'
+            }
         }
     }
     finally { $window.Close() }
