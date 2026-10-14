@@ -26,7 +26,7 @@ function Get-Defaults {
         Enabled        = $true
         StartCleanup   = $true
         AutoDeleteOnCopy = $true
-        DeleteDelayMinutes = 5
+        DeleteDelaySeconds = 300
         QuotedPaths    = $true
         ThemeMode      = 'System'
         ScreenshotDir  = (Join-Path $env:TEMP 'SnipToPath')
@@ -38,7 +38,7 @@ function Load-Settings {
     if (Test-Path -LiteralPath $settingsPath) {
         try {
             $previous = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($key in @('Enabled', 'StartCleanup', 'AutoDeleteOnCopy', 'DeleteDelayMinutes', 'QuotedPaths', 'ScreenshotDir', 'ThemeMode')) {
+            foreach ($key in @('Enabled', 'StartCleanup', 'AutoDeleteOnCopy', 'DeleteDelaySeconds', 'QuotedPaths', 'ScreenshotDir', 'ThemeMode')) {
                 if ($null -ne $previous.PSObject.Properties[$key] -and $null -ne $previous.$key) {
                     $script:config[$key] = $previous.$key
                 }
@@ -46,9 +46,14 @@ function Load-Settings {
         }
         catch { Write-Warning 'Could not read settings.json; using defaults.' }
     }
-    try { $delay = [int]$script:config.DeleteDelayMinutes } catch { $delay = 5 }
-    if ($delay -notin @(5,15,30,60)) { $delay = 5 }
-    $script:config.DeleteDelayMinutes = $delay
+    # Migrate old minute-based settings without overwriting a newer seconds value.
+    if ($previous -and $null -eq $previous.PSObject.Properties['DeleteDelaySeconds'] -and
+        $null -ne $previous.PSObject.Properties['DeleteDelayMinutes']) {
+        $script:config.DeleteDelaySeconds = [int]$previous.DeleteDelayMinutes * 60
+    }
+    try { $delay = [int]$script:config.DeleteDelaySeconds } catch { $delay = 300 }
+    if ($delay -lt 1 -or $delay -gt 604800) { $delay = 300 }
+    $script:config.DeleteDelaySeconds = $delay
     if ([string]$script:config.ThemeMode -notin @('System','Light','Dark')) { $script:config.ThemeMode = 'System' }
     if ([string]::IsNullOrWhiteSpace([string]$script:config.ScreenshotDir)) {
         $script:config.ScreenshotDir = Join-Path $env:TEMP 'SnipToPath'
@@ -918,6 +923,20 @@ namespace SnipUI {
     public static class Native {
         [DllImport("dwmapi.dll", PreserveSig = true)]
         public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y,
+                                               int cx, int cy, uint flags);
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT {
+        public int Left, Top, Right, Bottom;
+    }
+    public static class WindowPosition {
+        public const uint NoSize = 0x0001;
+        public const uint NoZOrder = 0x0004;
+        public const uint NoActivate = 0x0010;
     }
 }
 '@ -ReferencedAssemblies 'System.Drawing', 'System.Windows.Forms'
@@ -1059,10 +1078,7 @@ try {
             $script:quickUI.QuickStatus.Text = if ($script:config.Enabled) { 'Работает в фоне' } else { 'На паузе' }
             $activeColor = if ($script:config.Enabled) { '#19A878' } else { '#90939B' }
             $script:quickUI.QuickStatusDot.Fill = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($activeColor))
-            $script:quickUI.QuickDeleteHint.Text = ('Через {0} мин. после копирования' -f $script:config.DeleteDelayMinutes)
             $script:quickUI.QuickEnabled.IsChecked = [bool]$script:config.Enabled
-            $script:quickUI.QuickAutoDelete.IsChecked = [bool]$script:config.AutoDeleteOnCopy
-            $script:quickUI.QuickStartup.IsChecked = Test-Path -LiteralPath $startupLink
         }
     }
 
@@ -1074,7 +1090,7 @@ try {
         # could break long-running Codex / Claude tool calls.
         $script:pendingScreenshotDeletes.Add([pscustomobject]@{
             Path = $path
-            DeleteAfter = [DateTime]::UtcNow.AddMinutes([double]$script:config.DeleteDelayMinutes)
+            DeleteAfter = [DateTime]::UtcNow.AddSeconds([double]$script:config.DeleteDelaySeconds)
         })
     }
 
@@ -1109,6 +1125,24 @@ try {
         Sync-UiState
     }
 
+    function Get-TrayMenuPosition([int]$cursorX, [int]$cursorY, [int]$screenLeft, [int]$screenTop,
+            [int]$screenRight, [int]$screenBottom, [int]$menuWidth, [int]$menuHeight) {
+        # All arguments are in the same native screen coordinate space.
+        $padding = 8
+        $leftEdge = $screenLeft + $padding
+        $topEdge = $screenTop + $padding
+        $rightEdge = [Math]::Max($leftEdge, $screenRight - $menuWidth - $padding)
+        $bottomEdge = [Math]::Max($topEdge, $screenBottom - $menuHeight - $padding)
+        $left = [Math]::Max($leftEdge, [Math]::Min(($cursorX - $menuWidth + 36), $rightEdge))
+        $above = $cursorY - $menuHeight - 12
+        $below = $cursorY + 14
+        $preferred = if ($above -ge $topEdge) { $above }
+                     elseif ($below -le $bottomEdge) { $below }
+                     else { $above }
+        $top = [Math]::Max($topEdge, [Math]::Min($preferred, $bottomEdge))
+        return [System.Drawing.Point]::new([int]$left, [int]$top)
+    }
+
     function New-QuickMenu {
         # Own WPF window instead of WinForms ContextMenuStrip: consistent with settings,
         # proper rounded surfaces, large click targets and theme-aware switches.
@@ -1116,7 +1150,7 @@ try {
         $quickXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Width="372" SizeToContent="Height" WindowStyle="None" AllowsTransparency="True"
+        Width="336" SizeToContent="Height" WindowStyle="None" AllowsTransparency="True"
         ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True" Background="Transparent"
         WindowStartupLocation="Manual" FontFamily="Segoe UI" FontSize="13">
     <Window.Resources>
@@ -1204,19 +1238,8 @@ try {
                 <StackPanel><TextBlock Text="Обрабатывать изображения" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}"/>
                     <TextBlock Text="Любая картинка в буфере → путь к PNG" Foreground="{DynamicResource SubtleBrush}" FontSize="11" Margin="0,3,0,0"/></StackPanel>
             </ToggleButton>
-            <ToggleButton x:Name="QuickAutoDelete" Style="{StaticResource QuickToggle}">
-                <StackPanel><TextBlock Text="Удалять предыдущий PNG" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}"/>
-                    <TextBlock x:Name="QuickDeleteHint" Text="Через 5 минут после копирования" Foreground="{DynamicResource SubtleBrush}" FontSize="11" Margin="0,3,0,0"/></StackPanel>
-            </ToggleButton>
-            <ToggleButton x:Name="QuickStartup" Style="{StaticResource QuickToggle}">
-                <StackPanel><TextBlock Text="Запускать с Windows" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}"/>
-                    <TextBlock Text="Работает в трее" Foreground="{DynamicResource SubtleBrush}" FontSize="11" Margin="0,3,0,0"/></StackPanel>
-            </ToggleButton>
             <Border Background="{DynamicResource LineBrush}" Height="1" Margin="3,9,3,8"/>
             <Button x:Name="QuickSettings" Style="{StaticResource QuickAction}" Content="Настройки"/>
-            <Button x:Name="QuickOpenFolder" Style="{StaticResource QuickAction}" Content="Открыть папку PNG"/>
-            <Button x:Name="QuickClear" Style="{StaticResource QuickAction}" Content="Очистить временные PNG"/>
-            <Border Background="{DynamicResource LineBrush}" Height="1" Margin="3,8,3,8"/>
             <Button x:Name="QuickExit" Style="{StaticResource QuickAction}" Content="Выход"/>
         </StackPanel>
     </Border>
@@ -1225,7 +1248,7 @@ try {
         $window = [Windows.Markup.XamlReader]::Parse($quickXaml)
         $script:quickMenu = $window
         $script:quickUI = @{}
-        foreach ($name in @('QuickIcon','QuickStatusDot','QuickStatus','QuickDeleteHint','QuickEnabled','QuickAutoDelete','QuickStartup','QuickSettings','QuickOpenFolder','QuickClear','QuickExit')) {
+        foreach ($name in @('QuickIcon','QuickStatusDot','QuickStatus','QuickEnabled','QuickSettings','QuickExit')) {
             $script:quickUI[$name] = $window.FindName($name)
             if (-not $script:quickUI[$name]) { throw ('Quick menu element not found: ' + $name) }
         }
@@ -1235,29 +1258,7 @@ try {
             $script:config.Enabled = [bool]$script:quickUI.QuickEnabled.IsChecked
             Save-Settings; Sync-UiState
         })
-        $script:quickUI.QuickAutoDelete.Add_Click({
-            $script:config.AutoDeleteOnCopy = [bool]$script:quickUI.QuickAutoDelete.IsChecked
-            if (-not $script:config.AutoDeleteOnCopy) { $script:pendingScreenshotDeletes.Clear() }
-            Save-Settings; Sync-UiState
-        })
-        $script:quickUI.QuickStartup.Add_Click({
-            try { Set-Startup ([bool]$script:quickUI.QuickStartup.IsChecked) }
-            catch { Write-Log $_.Exception.Message; [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath') | Out-Null }
-            Sync-UiState
-        })
         $script:quickUI.QuickSettings.Add_Click({ $script:quickMenu.Hide(); Show-Settings })
-        $script:quickUI.QuickOpenFolder.Add_Click({
-            $script:quickMenu.Hide()
-            New-Item -ItemType Directory -Path $script:shotFolder -Force | Out-Null
-            Start-Process -FilePath explorer.exe -ArgumentList ('"{0}"' -f $script:shotFolder)
-        })
-        $script:quickUI.QuickClear.Add_Click({
-            $script:quickMenu.Hide()
-            $removed = Remove-OwnScreenshots $script:shotFolder
-            $script:lastScreenshotPath = $null
-            $script:pendingScreenshotDeletes.Clear()
-            $script:notify.ShowBalloonTip(1500, 'SnipToPath', ('Удалено PNG: {0}' -f $removed), [System.Windows.Forms.ToolTipIcon]::Info)
-        })
         $script:quickUI.QuickExit.Add_Click({ Exit-SnipToPath })
         $window.Add_Deactivated({ if (-not $script:isExiting) { $script:quickMenu.Hide() } })
         Sync-UiState
@@ -1269,28 +1270,33 @@ try {
         if ($script:quickMenu.IsVisible) { $script:quickMenu.Hide(); return }
         Sync-UiState
         Apply-Theme
-        # Keep the window on the clicked monitor, including non-primary displays.
-        $mouse = [System.Windows.Forms.Cursor]::Position
-        $monitor = [System.Windows.Forms.Screen]::FromPoint($mouse).WorkingArea
-        $helper = [System.Windows.Interop.WindowInteropHelper]::new($script:quickMenu)
-        $null = $helper.EnsureHandle()
-        $source = [System.Windows.PresentationSource]::FromVisual($script:quickMenu)
-        $scaleX = 1.0; $scaleY = 1.0
-        if ($source -and $source.CompositionTarget) {
-            $scaleX = [double]$source.CompositionTarget.TransformToDevice.M11
-            $scaleY = [double]$source.CompositionTarget.TransformToDevice.M22
+        # Place the actual HWND using Win32 coordinates. Mixing WPF DIPs and
+        # physical Screen.WorkingArea caused clipping on multi-DPI monitors.
+        $script:quickMenu.Opacity = 0
+        try {
+            $script:quickMenu.Show()
+            $script:quickMenu.UpdateLayout()
+            $helper = [System.Windows.Interop.WindowInteropHelper]::new($script:quickMenu)
+            $hwnd = $helper.Handle
+            $rect = [SnipUI.RECT]::new()
+            if (-not [SnipUI.Native]::GetWindowRect($hwnd, [ref]$rect)) {
+                throw 'Не удалось определить размер меню.'
+            }
+            $mouse = [System.Windows.Forms.Cursor]::Position
+            $working = [System.Windows.Forms.Screen]::FromPoint($mouse).WorkingArea
+            $position = Get-TrayMenuPosition $mouse.X $mouse.Y $working.Left $working.Top $working.Right $working.Bottom ($rect.Right - $rect.Left) ($rect.Bottom - $rect.Top)
+            $flags = [SnipUI.WindowPosition]::NoSize -bor [SnipUI.WindowPosition]::NoZOrder -bor [SnipUI.WindowPosition]::NoActivate
+            if (-not [SnipUI.Native]::SetWindowPos($hwnd, [IntPtr]::Zero, $position.X, $position.Y, 0, 0, [uint32]$flags)) {
+                throw 'Не удалось расположить меню на экране.'
+            }
+            $script:quickMenu.Opacity = 1
+            $null = $script:quickMenu.Activate()
         }
-        $script:quickMenu.Measure([System.Windows.Size]::new($script:quickMenu.Width, [double]::PositiveInfinity))
-        $widthPx = [int][Math]::Ceiling($script:quickMenu.Width * $scaleX)
-        $heightDip = [Math]::Max(1, [double]$script:quickMenu.DesiredSize.Height)
-        $heightPx = [int][Math]::Ceiling($heightDip * $scaleY)
-        $xPx = [Math]::Max($monitor.Left, [Math]::Min($mouse.X - $widthPx + 50, $monitor.Right - $widthPx))
-        $yPx = if ($mouse.Y + 16 + $heightPx -le $monitor.Bottom) { $mouse.Y + 16 } else { $mouse.Y - $heightPx - 12 }
-        $yPx = [Math]::Max($monitor.Top, [Math]::Min($yPx, $monitor.Bottom - $heightPx))
-        $script:quickMenu.Left = $xPx / $scaleX
-        $script:quickMenu.Top = $yPx / $scaleY
-        $script:quickMenu.Show()
-        $null = $script:quickMenu.Activate()
+        catch {
+            $script:quickMenu.Opacity = 1
+            $script:quickMenu.Hide()
+            throw
+        }
     }
 
     function New-SettingsWindow {
