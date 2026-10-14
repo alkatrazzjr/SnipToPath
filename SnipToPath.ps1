@@ -1312,12 +1312,14 @@ try {
                 PageBrush='#17181A'; CardBrush='#242529'; AltBrush='#303136'
                 TextBrush='#F7F7F7'; SubtleBrush='#B6B9C3'; LineBrush='#414349'
                 HoverBrush='#373A40'; AccentSubtleBrush='#283B4D'; OffBrush='#60646D'
+                ScrollThumbBrush='#5D6470'; ScrollThumbHoverBrush='#929CAA'
             }
         } else {
             $colors = @{
                 PageBrush='#F3F3F3'; CardBrush='#FFFFFF'; AltBrush='#F9F9FA'
                 TextBrush='#1C1C1E'; SubtleBrush='#60636B'; LineBrush='#E2E3E8'
                 HoverBrush='#E9EAEE'; AccentSubtleBrush='#E6F0FA'; OffBrush='#898C95'
+                ScrollThumbBrush='#A0A5AF'; ScrollThumbHoverBrush='#747C88'
             }
         }
         $colors['AccentBrush'] = $state.Accent
@@ -1649,6 +1651,67 @@ try {
         <SolidColorBrush x:Key="AccentSubtleBrush" Color="#E6F0FA"/>
         <SolidColorBrush x:Key="OffBrush" Color="#898C95"/>
         <SolidColorBrush x:Key="SwitchThumbBrush" Color="#FFFFFF"/>
+        <SolidColorBrush x:Key="ScrollThumbBrush" Color="#A0A5AF"/>
+        <SolidColorBrush x:Key="ScrollThumbHoverBrush" Color="#747C88"/>
+        <!-- Settings scrollbar: slim theme-aware rail without the system's
+             white scrollbar background or large arrow buttons. -->
+        <Style x:Key="ScrollPageButton" TargetType="RepeatButton">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Border Background="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ScrollGrip" TargetType="Thumb">
+            <Setter Property="Width" Value="6"/>
+            <Setter Property="MinHeight" Value="28"/>
+            <Setter Property="Background" Value="{DynamicResource ScrollThumbBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="3"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource ScrollThumbHoverBrush}"/>
+                </Trigger>
+                <Trigger Property="IsDragging" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource ScrollThumbHoverBrush}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="SettingsScrollBar" TargetType="ScrollBar">
+            <Setter Property="Width" Value="12"/>
+            <Setter Property="Background" Value="{DynamicResource PageBrush}"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Border Background="{TemplateBinding Background}" Padding="2,5,4,5">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True" Focusable="False"
+                                   Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}"
+                                   Value="{TemplateBinding Value}" ViewportSize="{TemplateBinding ViewportSize}">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Style="{StaticResource ScrollPageButton}"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource ScrollGrip}"/>
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Style="{StaticResource ScrollPageButton}"/>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
         </Style>
@@ -1765,7 +1828,12 @@ try {
                 <Button x:Name="CloseButton" Grid.Column="3" Content="Закрыть" Width="106" Height="35" Style="{StaticResource PrimaryButton}"/>
             </Grid>
         </Border>
-        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      Background="{DynamicResource PageBrush}" BorderThickness="0"
+                      CanContentScroll="False" PanningMode="VerticalOnly">
+            <ScrollViewer.Resources>
+                <Style TargetType="ScrollBar" BasedOn="{StaticResource SettingsScrollBar}"/>
+            </ScrollViewer.Resources>
             <Grid Margin="24,19,24,6">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
