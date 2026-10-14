@@ -43,6 +43,24 @@ jobs:
             $window.Close()
             Write-Host "PASS WPF XAML parse: $variable"
           }
+          # Compile the actual WPF/Win32 and native Explorer folder-picker types.
+          $nativeMatch = [regex]::Match($source, "(?s)Add-Type -TypeDefinition @'\\r?\\n(.*?)\\r?\\n'@ -ReferencedAssemblies 'System.Drawing', 'System.Windows.Forms'")
+          if (-not $nativeMatch.Success) { throw 'Native UI C# declaration not found' }
+          Add-Type -TypeDefinition $nativeMatch.Groups[1].Value -ReferencedAssemblies 'System.Drawing', 'System.Windows.Forms'
+          if (-not ([SnipUI.Native].GetMethod('SetWindowPos'))) { throw 'Native HWND positioning is missing' }
+          if (-not ([SnipUI.FolderPicker].GetMethod('Pick'))) { throw 'Modern folder picker is missing' }
+          Write-Host 'PASS Win32 menu positioning and Explorer folder picker compile'
+          $quickMatch = [regex]::Match($source, "(?s)\\$quickXaml\\s*=\\s*@'\\r?\\n(.*?)\\r?\\n'@")
+          if (-not $quickMatch.Success) { throw 'Quick menu XAML not found' }
+          $quick = [Windows.Markup.XamlReader]::Parse($quickMatch.Groups[1].Value)
+          foreach ($name in @('QuickEnabled','QuickSettings','QuickExit')) {
+            if (-not $quick.FindName($name)) { throw "Missing tray action: $name" }
+          }
+          foreach ($removed in @('QuickAutoDelete','QuickStartup','QuickClear','QuickOpenFolder')) {
+            if ($quick.FindName($removed)) { throw "Unexpected obsolete tray action: $removed" }
+          }
+          $quick.Close()
+          Write-Host 'PASS compact tray menu actions'
           if ($source.Contains('new System.Windows.Forms.ContextMenuStrip')) { throw 'Legacy WinForms context menu must not return' }
           $icon = [IO.File]::ReadAllBytes((Resolve-Path .\assets\SnipToPath.ico))
           if ($icon.Length -lt 256 -or $icon[0] -ne 0 -or $icon[1] -ne 0 -or $icon[2] -ne 1 -or $icon[3] -ne 0) {
@@ -58,11 +76,11 @@ jobs:
           $mainMatch = [regex]::Match($source, '(?s)\$xaml\s*=\s*@''\r?\n(.*?)\r?\n''@')
           $settingsWindow = [Windows.Markup.XamlReader]::Parse($mainMatch.Groups[1].Value)
           foreach ($name in @('EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch',
-              'Delay5','Delay15','Delay30','Delay60','ThemeSystem','ThemeLight','ThemeDark',
-              'OpenFolderButton','ClearButton','CloseButton','FolderButton','StatusDot')) {
+              'DeleteDelayInput','SaveDelayButton','ThemeSystem','ThemeLight','ThemeDark',
+              'OpenFolderButton','ClearButton','CloseButton','FolderButton','SaveFolderButton','FolderPathInput','StatusDot')) {
             if (-not $settingsWindow.FindName($name)) { throw "Missing UI control: $name" }
           }
-          if ($settingsWindow.Height -gt 650 -or $settingsWindow.Width -gt 760) { throw 'Settings window must be compact' }
+          if ($settingsWindow.Height -gt 700 -or $settingsWindow.Width -gt 760) { throw 'Settings window must be compact' }
           $section = $settingsWindow.Resources['Section']
           if (-not ($section.Setters | Where-Object { $_.Property.Name -eq 'Foreground' })) {
             throw 'Section foreground must follow Windows theme'
@@ -80,7 +98,7 @@ jobs:
             if ($functions.Count -ne 1) { throw "Expected a single $fname function" }
             Invoke-Expression $functions[0].Extent.Text
           }
-          $script:config = @{ AutoDeleteOnCopy = $true; DeleteDelayMinutes = 15 }
+          $script:config = @{ AutoDeleteOnCopy = $true; DeleteDelaySeconds = 65 }
           $script:pendingScreenshotDeletes = New-Object 'System.Collections.Generic.List[object]'
           $testPath = Join-Path ([IO.Path]::GetTempPath()) ('sniptopath-ci-' + [Guid]::NewGuid().ToString('N') + '.png')
           [IO.File]::WriteAllBytes($testPath, [byte[]](1,2,3,4))
@@ -88,8 +106,8 @@ jobs:
             $script:lastScreenshotPath = $testPath
             Queue-PreviousScreenshot
             if ($script:pendingScreenshotDeletes.Count -ne 1) { throw 'Missing scheduled cleanup' }
-            $minutes = ($script:pendingScreenshotDeletes[0].DeleteAfter - [DateTime]::UtcNow).TotalMinutes
-            if ($minutes -lt 14 -or $minutes -gt 16) { throw 'Incorrect cleanup delay' }
+            $seconds = ($script:pendingScreenshotDeletes[0].DeleteAfter - [DateTime]::UtcNow).TotalSeconds
+            if ($seconds -lt 63 -or $seconds -gt 67) { throw 'Incorrect cleanup delay in seconds' }
             $script:pendingScreenshotDeletes[0].DeleteAfter = [DateTime]::UtcNow.AddSeconds(-1)
             Invoke-PendingScreenshotCleanup
             if (Test-Path -LiteralPath $testPath) { throw 'Expired screenshot was not deleted' }
