@@ -57,10 +57,10 @@ jobs:
           $quickMatch = [regex]::Match($source, '(?s)\$quickXaml\s*=\s*@''\r?\n(.*?)\r?\n''@')
           if (-not $quickMatch.Success) { throw 'Quick menu XAML not found' }
           $quick = [Windows.Markup.XamlReader]::Parse($quickMatch.Groups[1].Value)
-          foreach ($name in @('QuickEnabled','QuickSettings','QuickExit')) {
+          foreach ($name in @('QuickEnabled','QuickOpenFolder','QuickSettings','QuickExit')) {
             if (-not $quick.FindName($name)) { throw "Missing tray action: $name" }
           }
-          foreach ($removed in @('QuickAutoDelete','QuickStartup','QuickClear','QuickOpenFolder')) {
+          foreach ($removed in @('QuickAutoDelete','QuickStartup','QuickClear')) {
             if ($quick.FindName($removed)) { throw "Unexpected obsolete tray action: $removed" }
           }
           $quick.Close()

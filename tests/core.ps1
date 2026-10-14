@@ -202,3 +202,34 @@ finally {
     if (Test-Path -LiteralPath $folderRoot) { Remove-Item -LiteralPath $folderRoot -Recurse -Force }
 }
 Write-Host 'PASS custom delay seconds and editable screenshot folder validation'
+
+# Tray and Settings must open the active folder, not the previous/default folder.
+$folderDefs = @($ast.FindAll({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Open-ScreenshotFolder'
+}, $true))
+if ($folderDefs.Count -ne 1) { throw 'Missing or duplicated Open-ScreenshotFolder helper' }
+Invoke-Expression $folderDefs[0].Extent.Text
+$folderRoot = Join-Path ([IO.Path]::GetTempPath()) ('stp-open-folder-' + [guid]::NewGuid().ToString('N'))
+$script:shotFolder = Join-Path $folderRoot 'My PNG folder'
+$script:openedExplorer = $null
+function Start-Process {
+    [CmdletBinding()]
+    param([string]$FilePath, [string]$ArgumentList)
+    $script:openedExplorer = @{ FilePath = $FilePath; ArgumentList = $ArgumentList }
+}
+try {
+    Open-ScreenshotFolder
+    if (-not (Test-Path -LiteralPath $script:shotFolder -PathType Container)) {
+        throw 'Screenshot folder was not recreated'
+    }
+    if ($script:openedExplorer.FilePath -ne 'explorer.exe' -or
+        $script:openedExplorer.ArgumentList -ne ('"{0}"' -f $script:shotFolder)) {
+        throw 'Explorer did not receive the configured folder with safe quoting'
+    }
+    Write-Host 'PASS quick folder action opens current screenshot directory'
+}
+finally {
+    Remove-Item Function:\Start-Process -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $folderRoot) { Remove-Item -LiteralPath $folderRoot -Recurse -Force }
+}

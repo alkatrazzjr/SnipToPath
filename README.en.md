@@ -24,7 +24,7 @@ Supports Windows 10/11. No administrator privileges or additional runtime depend
 
 ## Tray menu
 
-Right-click the tray icon to turn image processing on or off, open Settings, or quit. Double-click the icon to open Settings directly.
+Right-click the tray icon to toggle image processing, open your PNG folder in File Explorer, open Settings, or quit. Double-click the icon to open Settings directly.
 
 ## Settings
 

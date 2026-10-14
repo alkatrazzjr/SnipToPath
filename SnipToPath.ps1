@@ -27,6 +27,7 @@ $script:isExiting = $false
 function Get-TranslationTable {
     return @{
         'Настройки' = 'Settings'
+        'Открыть папку PNG' = 'Open PNG folder'
         'Выход' = 'Exit'
         'Обрабатывать изображения' = 'Process images'
         'Любая картинка в буфере → путь к PNG' = 'Clipboard image → PNG path'
@@ -1353,6 +1354,15 @@ try {
         return [System.Drawing.Point]::new([int]$left, [int]$top)
     }
 
+    function Open-ScreenshotFolder {
+        # Use the current folder, including a user-selected custom directory.
+        # If its contents were removed externally, Explorer should still open it.
+        $folder = [string]$script:shotFolder
+        if ([string]::IsNullOrWhiteSpace($folder)) { throw (Translate-UI 'Укажи папку для сохранения PNG.') }
+        [void][IO.Directory]::CreateDirectory($folder)
+        Start-Process -FilePath explorer.exe -ArgumentList ('"{0}"' -f $folder) -ErrorAction Stop
+    }
+
     function New-QuickMenu {
         # Own WPF window instead of WinForms ContextMenuStrip: consistent with settings,
         # proper rounded surfaces, large click targets and theme-aware switches.
@@ -1449,6 +1459,7 @@ try {
                     <TextBlock Text="Любая картинка в буфере → путь к PNG" Foreground="{DynamicResource SubtleBrush}" FontSize="11" Margin="0,3,0,0"/></StackPanel>
             </ToggleButton>
             <Border Background="{DynamicResource LineBrush}" Height="1" Margin="3,9,3,8"/>
+            <Button x:Name="QuickOpenFolder" Style="{StaticResource QuickAction}" Content="Открыть папку PNG"/>
             <Button x:Name="QuickSettings" Style="{StaticResource QuickAction}" Content="Настройки"/>
             <Button x:Name="QuickExit" Style="{StaticResource QuickAction}" Content="Выход"/>
         </StackPanel>
@@ -1458,7 +1469,7 @@ try {
         $window = [Windows.Markup.XamlReader]::Parse($quickXaml)
         $script:quickMenu = $window
         $script:quickUI = @{}
-        foreach ($name in @('QuickIcon','QuickStatusDot','QuickStatus','QuickEnabled','QuickSettings','QuickExit')) {
+        foreach ($name in @('QuickIcon','QuickStatusDot','QuickStatus','QuickEnabled','QuickOpenFolder','QuickSettings','QuickExit')) {
             $script:quickUI[$name] = $window.FindName($name)
             if (-not $script:quickUI[$name]) { throw ('Quick menu element not found: ' + $name) }
         }
@@ -1467,6 +1478,14 @@ try {
         $script:quickUI.QuickEnabled.Add_Click({
             $script:config.Enabled = [bool]$script:quickUI.QuickEnabled.IsChecked
             Save-Settings; Sync-UiState
+        })
+        $script:quickUI.QuickOpenFolder.Add_Click({
+            $script:quickMenu.Hide()
+            try { Open-ScreenshotFolder }
+            catch {
+                Write-Log ($_.ToString())
+                [System.Windows.MessageBox]::Show((Translate-UI $_.Exception.Message), 'SnipToPath', 'OK', 'Error') | Out-Null
+            }
         })
         $script:quickUI.QuickSettings.Add_Click({ $script:quickMenu.Hide(); Show-Settings })
         $script:quickUI.QuickExit.Add_Click({ Exit-SnipToPath })
@@ -1845,8 +1864,11 @@ try {
             }
         })
         $script:ui.OpenFolderButton.Add_Click({
-            New-Item -ItemType Directory -Path $script:shotFolder -Force | Out-Null
-            Start-Process -FilePath explorer.exe -ArgumentList ('"{0}"' -f $script:shotFolder)
+            try { Open-ScreenshotFolder }
+            catch {
+                Write-Log ($_.ToString())
+                [System.Windows.MessageBox]::Show((Translate-UI $_.Exception.Message), 'SnipToPath', 'OK', 'Error') | Out-Null
+            }
         })
         $script:ui.ClearButton.Add_Click({
             $deleted = Remove-OwnScreenshots $script:shotFolder
