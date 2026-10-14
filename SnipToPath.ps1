@@ -1491,14 +1491,14 @@ try {
             $hwnd = $helper.Handle
             $rect = [SnipUI.RECT]::new()
             if (-not [SnipUI.Native]::GetWindowRect($hwnd, [ref]$rect)) {
-                throw 'Не удалось определить размер меню.'
+                throw (Translate-UI 'Не удалось определить размер меню.')
             }
             $mouse = [System.Windows.Forms.Cursor]::Position
             $working = [System.Windows.Forms.Screen]::FromPoint($mouse).WorkingArea
             $position = Get-TrayMenuPosition $mouse.X $mouse.Y $working.Left $working.Top $working.Right $working.Bottom ($rect.Right - $rect.Left) ($rect.Bottom - $rect.Top)
             $flags = [SnipUI.WindowPosition]::NoSize -bor [SnipUI.WindowPosition]::NoZOrder -bor [SnipUI.WindowPosition]::NoActivate
             if (-not [SnipUI.Native]::SetWindowPos($hwnd, [IntPtr]::Zero, $position.X, $position.Y, 0, 0, [uint32]$flags)) {
-                throw 'Не удалось расположить меню на экране.'
+                throw (Translate-UI 'Не удалось расположить меню на экране.')
             }
             $script:quickMenu.Opacity = 1
             $null = $script:quickMenu.Activate()
@@ -1515,7 +1515,7 @@ try {
         $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SnipToPath — Настройки" Width="720" Height="672" MinWidth="670" MinHeight="555"
+        Title="SnipToPath — Настройки" Width="720" Height="720" MinWidth="670" MinHeight="555"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource PageBrush}"
         FontFamily="Segoe UI" FontSize="13" ShowInTaskbar="True">
     <Window.Resources>
@@ -1715,6 +1715,13 @@ try {
                                 <ToggleButton x:Name="ThemeLight" Content="Светлая" Style="{StaticResource Choice}" MinWidth="77"/>
                                 <ToggleButton x:Name="ThemeDark" Content="Тёмная" Style="{StaticResource Choice}" MinWidth="72" Margin="0"/>
                             </StackPanel>
+                            <Border Height="1" Background="{DynamicResource LineBrush}" Margin="0,13,0,11"/>
+                            <TextBlock Text="Язык" FontWeight="SemiBold" Margin="0,0,0,9"/>
+                            <StackPanel Orientation="Horizontal">
+                                <ToggleButton x:Name="LanguageAuto" Content="Как в Windows" Style="{StaticResource Choice}" MinWidth="112"/>
+                                <ToggleButton x:Name="LanguageRu" Content="Русский" Style="{StaticResource Choice}" MinWidth="73"/>
+                                <ToggleButton x:Name="LanguageEn" Content="English" Style="{StaticResource Choice}" MinWidth="71" Margin="0"/>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -1727,9 +1734,9 @@ try {
         $window.Icon = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon($script:icon.Handle, [System.Windows.Int32Rect]::Empty, [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
         $script:settingsForm = $window
         $script:ui = @{}
-        foreach ($name in @('HeaderIcon','StatusDot','StatusName','EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch','FolderPathInput','FolderButton','SaveFolderButton','OpenFolderButton','ClearButton','CloseButton','DeleteDelayInput','SaveDelayButton','ThemeSystem','ThemeLight','ThemeDark')) {
+        foreach ($name in @('HeaderIcon','StatusDot','StatusName','EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch','FolderPathInput','FolderButton','SaveFolderButton','OpenFolderButton','ClearButton','CloseButton','DeleteDelayInput','SaveDelayButton','ThemeSystem','ThemeLight','ThemeDark','LanguageAuto','LanguageRu','LanguageEn')) {
             $script:ui[$name] = $window.FindName($name)
-            if (-not $script:ui[$name]) { throw ('Элемент интерфейса не найден: ' + $name) }
+            if (-not $script:ui[$name]) { throw ((Translate-UI 'Элемент интерфейса не найден: ') + $name) }
         }
         $script:ui.EnabledSwitch.IsChecked = [bool]$script:config.Enabled
         $script:ui.AutoDeleteSwitch.IsChecked = [bool]$script:config.AutoDeleteOnCopy
@@ -1758,7 +1765,7 @@ try {
             try { Set-Startup ([bool]$script:ui.StartupSwitch.IsChecked) }
             catch {
                 $script:ui.StartupSwitch.IsChecked = Test-Path -LiteralPath $startupLink
-                [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Error') | Out-Null
+                [System.Windows.MessageBox]::Show((Translate-UI $_.Exception.Message), 'SnipToPath', 'OK', 'Error') | Out-Null
             }
             Sync-UiState
         })
@@ -1771,7 +1778,7 @@ try {
                 $seconds = ConvertTo-DelaySeconds ([string]$script:ui.DeleteDelayInput.Text)
                 if ($seconds -lt 30) {
                     $answer = [System.Windows.MessageBox]::Show(
-                        'При задержке меньше 30 секунд агент может не успеть открыть PNG. Всё равно сохранить?',
+                        (Translate-UI 'При задержке меньше 30 секунд агент может не успеть открыть PNG. Всё равно сохранить?'),
                         'SnipToPath', 'YesNo', 'Warning')
                     if ($answer -ne [System.Windows.MessageBoxResult]::Yes) { return }
                 }
@@ -1780,7 +1787,7 @@ try {
                 Sync-UiState
             }
             catch {
-                [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Warning') | Out-Null
+                [System.Windows.MessageBox]::Show((Translate-UI $_.Exception.Message), 'SnipToPath', 'OK', 'Warning') | Out-Null
             }
         })
         $script:ui.DeleteDelayInput.Add_KeyDown({
@@ -1816,7 +1823,7 @@ try {
                 $script:ui.FolderPathInput.ToolTip = $folder
             }
             catch {
-                [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Warning') | Out-Null
+                [System.Windows.MessageBox]::Show((Translate-UI $_.Exception.Message), 'SnipToPath', 'OK', 'Warning') | Out-Null
             }
         }
         $script:ui.SaveFolderButton.Add_Click({ & $script:saveFolderPath })
@@ -1834,7 +1841,7 @@ try {
                 if ($picked) { $script:ui.FolderPathInput.Text = $picked; & $script:saveFolderPath }
             }
             catch {
-                [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Error') | Out-Null
+                [System.Windows.MessageBox]::Show((Translate-UI $_.Exception.Message), 'SnipToPath', 'OK', 'Error') | Out-Null
             }
         })
         $script:ui.OpenFolderButton.Add_Click({
@@ -1845,7 +1852,7 @@ try {
             $deleted = Remove-OwnScreenshots $script:shotFolder
             $script:lastScreenshotPath = $null
             $script:pendingScreenshotDeletes.Clear()
-            [System.Windows.MessageBox]::Show(('Удалено временных PNG: {0}' -f $deleted), 'SnipToPath', 'OK', 'Information') | Out-Null
+            [System.Windows.MessageBox]::Show(((Translate-UI 'Удалено временных PNG: {0}') -f $deleted), 'SnipToPath', 'OK', 'Information') | Out-Null
         })
         $script:ui.CloseButton.Add_Click({ $script:settingsForm.Hide() })
         $window.Add_Closing({ param($sender, $e)
