@@ -1197,7 +1197,7 @@ try {
         $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SnipToPath — Настройки" Width="720" Height="615" MinWidth="670" MinHeight="555"
+        Title="SnipToPath — Настройки" Width="720" Height="640" MinWidth="670" MinHeight="555"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource PageBrush}"
         FontFamily="Segoe UI" FontSize="13" ShowInTaskbar="True">
     <Window.Resources>
@@ -1297,7 +1297,7 @@ try {
             </ControlTemplate></Setter.Value></Setter>
         </Style>
     </Window.Resources>
-    <DockPanel LastChildFill="True">
+    <DockPanel LastChildFill="True" Background="{DynamicResource PageBrush}">
         <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,1,0,0" Padding="24,12" Background="{DynamicResource PageBrush}">
             <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
