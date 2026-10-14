@@ -1154,9 +1154,10 @@ try {
             $script:ui.StartupSwitch.IsChecked = Test-Path -LiteralPath $startupLink
             $script:ui.CleanupSwitch.IsChecked = [bool]$script:config.StartCleanup
             $script:ui.QuotesSwitch.IsChecked = [bool]$script:config.QuotedPaths
-            foreach ($minutes in @(5,15,30,60)) {
-                $script:ui["Delay$minutes"].IsChecked = [int]$script:config.DeleteDelayMinutes -eq $minutes
-                $script:ui["Delay$minutes"].IsEnabled = [bool]$script:config.AutoDeleteOnCopy
+            $script:ui.DeleteDelayInput.IsEnabled = [bool]$script:config.AutoDeleteOnCopy
+            $script:ui.SaveDelayButton.IsEnabled = [bool]$script:config.AutoDeleteOnCopy
+            if (-not $script:ui.DeleteDelayInput.IsKeyboardFocusWithin) {
+                $script:ui.DeleteDelayInput.Text = [string]$script:config.DeleteDelaySeconds
             }
             foreach ($theme in @('System','Light','Dark')) {
                 $script:ui["Theme$theme"].IsChecked = [string]$script:config.ThemeMode -eq $theme
@@ -1394,7 +1395,7 @@ try {
         $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SnipToPath — Настройки" Width="720" Height="640" MinWidth="670" MinHeight="555"
+        Title="SnipToPath — Настройки" Width="720" Height="672" MinWidth="670" MinHeight="555"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource PageBrush}"
         FontFamily="Segoe UI" FontSize="13" ShowInTaskbar="True">
     <Window.Resources>
@@ -1544,14 +1545,15 @@ try {
                                 <ToggleButton x:Name="AutoDeleteSwitch" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center"/>
                             </Grid>
                             <Border Background="{DynamicResource LineBrush}" Height="1" Margin="0,12"/>
-                            <TextBlock Text="Задержка удаления" FontWeight="SemiBold" Margin="0,0,0,7"/>
-                            <StackPanel Orientation="Horizontal">
-                                <ToggleButton x:Name="Delay5" Content="5 мин" Style="{StaticResource Choice}"/>
-                                <ToggleButton x:Name="Delay15" Content="15 мин" Style="{StaticResource Choice}"/>
-                                <ToggleButton x:Name="Delay30" Content="30 мин" Style="{StaticResource Choice}"/>
-                                <ToggleButton x:Name="Delay60" Content="60 мин" Style="{StaticResource Choice}" Margin="0"/>
-                            </StackPanel>
-                            <TextBlock Text="Файл остаётся доступным агенту до удаления" Style="{StaticResource Hint}" Margin="0,7,0,0"/>
+                            <TextBlock Text="Задержка удаления, секунд" FontWeight="SemiBold" Margin="0,0,0,7"/>
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBox x:Name="DeleteDelayInput" Grid.Column="0" Height="35" FontSize="13" Padding="10,6"
+                                         BorderBrush="{DynamicResource LineBrush}" Background="{DynamicResource AltBrush}"
+                                         Foreground="{DynamicResource TextBrush}" VerticalContentAlignment="Center"/>
+                                <Button x:Name="SaveDelayButton" Grid.Column="1" Content="Применить" Height="35"
+                                        Margin="8,0,0,0" Style="{StaticResource SoftButton}"/>
+                            </Grid>
+                            <TextBlock Text="От 1 секунды до 7 дней (604800)." Style="{StaticResource Hint}" Margin="0,7,0,0"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -1574,9 +1576,13 @@ try {
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
                             <TextBlock Text="Папка PNG" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                <Border Grid.Column="0" Background="{DynamicResource AltBrush}" CornerRadius="8" Padding="9,8" Margin="0,0,6,0"><TextBlock x:Name="FolderText" FontSize="11.5" Foreground="{DynamicResource SubtleBrush}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/></Border>
-                                <Button x:Name="FolderButton" Grid.Column="1" Content="Изменить" Style="{StaticResource SoftButton}"/>
+                            <TextBox x:Name="FolderPathInput" Height="35" FontSize="11.5" Padding="9,5" VerticalContentAlignment="Center"
+                                     BorderBrush="{DynamicResource LineBrush}" Background="{DynamicResource AltBrush}"
+                                     Foreground="{DynamicResource TextBrush}"/>
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <Button x:Name="FolderButton" Grid.Column="1" Content="Обзор…" Height="32" Style="{StaticResource SoftButton}" Margin="0,0,6,0"/>
+                                <Button x:Name="SaveFolderButton" Grid.Column="2" Content="Сохранить" Height="32" Style="{StaticResource SoftButton}"/>
                             </Grid>
                         </StackPanel>
                     </Border>
@@ -1601,7 +1607,7 @@ try {
         $window.Icon = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon($script:icon.Handle, [System.Windows.Int32Rect]::Empty, [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
         $script:settingsForm = $window
         $script:ui = @{}
-        foreach ($name in @('HeaderIcon','StatusDot','StatusName','EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch','FolderText','FolderButton','OpenFolderButton','ClearButton','CloseButton','Delay5','Delay15','Delay30','Delay60','ThemeSystem','ThemeLight','ThemeDark')) {
+        foreach ($name in @('HeaderIcon','StatusDot','StatusName','EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch','FolderPathInput','FolderButton','SaveFolderButton','OpenFolderButton','ClearButton','CloseButton','DeleteDelayInput','SaveDelayButton','ThemeSystem','ThemeLight','ThemeDark')) {
             $script:ui[$name] = $window.FindName($name)
             if (-not $script:ui[$name]) { throw ('Элемент интерфейса не найден: ' + $name) }
         }
@@ -1610,10 +1616,10 @@ try {
         $script:ui.QuotesSwitch.IsChecked = [bool]$script:config.QuotedPaths
         $script:ui.StartupSwitch.IsChecked = Test-Path -LiteralPath $startupLink
         $script:ui.CleanupSwitch.IsChecked = [bool]$script:config.StartCleanup
-        $script:ui.FolderText.Text = [string]$script:config.ScreenshotDir
+        $script:ui.FolderPathInput.Text = [string]$script:config.ScreenshotDir
         $script:ui.HeaderIcon.Source = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon(
             $script:icon.Handle, [System.Windows.Int32Rect]::Empty, [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
-        $script:ui.FolderText.ToolTip = [string]$script:config.ScreenshotDir
+        $script:ui.FolderPathInput.ToolTip = [string]$script:config.ScreenshotDir
 
         $script:ui.EnabledSwitch.Add_Click({
             $script:config.Enabled = [bool]$script:ui.EnabledSwitch.IsChecked
@@ -1640,15 +1646,30 @@ try {
             $script:config.StartCleanup = [bool]$script:ui.CleanupSwitch.IsChecked
             Save-Settings
         })
-        foreach ($minutes in @(5,15,30,60)) {
-            $choice = $script:ui["Delay$minutes"]
-            $choice.Tag = $minutes
-            $choice.Add_Click({
-                param($sender, $eventArgs)
-                $script:config.DeleteDelayMinutes = [int]$sender.Tag
-                Save-Settings; Sync-UiState
-            })
-        }
+        $script:ui.SaveDelayButton.Add_Click({
+            try {
+                $seconds = ConvertTo-DelaySeconds ([string]$script:ui.DeleteDelayInput.Text)
+                if ($seconds -lt 30) {
+                    $answer = [System.Windows.MessageBox]::Show(
+                        'При задержке меньше 30 секунд агент может не успеть открыть PNG. Всё равно сохранить?',
+                        'SnipToPath', 'YesNo', 'Warning')
+                    if ($answer -ne [System.Windows.MessageBoxResult]::Yes) { return }
+                }
+                $script:config.DeleteDelaySeconds = $seconds
+                Save-Settings
+                Sync-UiState
+            }
+            catch {
+                [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Warning') | Out-Null
+            }
+        })
+        $script:ui.DeleteDelayInput.Add_KeyDown({
+            param($sender, $e)
+            if ($e.Key -eq [System.Windows.Input.Key]::Return) {
+                $script:ui.SaveDelayButton.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))
+                $e.Handled = $true
+            }
+        })
         foreach ($theme in @('System','Light','Dark')) {
             $choice = $script:ui["Theme$theme"]
             $choice.Tag = $theme
@@ -1657,23 +1678,36 @@ try {
                 Set-ThemeMode ([string]$sender.Tag)
             })
         }
-        $script:ui.FolderButton.Add_Click({
-            $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+        function Save-FolderPath {
             try {
-                $dialog.Description = 'Папка для временных PNG'
-                if (Test-Path -LiteralPath $script:shotFolder -PathType Container) { $dialog.SelectedPath = $script:shotFolder }
-                if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-                    $folder = $dialog.SelectedPath
-                    New-Item -ItemType Directory -Path $folder -Force | Out-Null
-                    $script:config.ScreenshotDir = $folder
-                    $script:shotFolder = $folder
-                    $script:ui.FolderText.Text = $folder
-                    $script:ui.FolderText.ToolTip = $folder
-                    Save-Settings
-                }
-            } catch {
+                $folder = Resolve-ScreenshotFolder ([string]$script:ui.FolderPathInput.Text)
+                $script:config.ScreenshotDir = $folder
+                $script:shotFolder = $folder
+                Save-Settings
+                $script:ui.FolderPathInput.Text = $folder
+                $script:ui.FolderPathInput.ToolTip = $folder
+            }
+            catch {
+                [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Warning') | Out-Null
+            }
+        }
+        $script:ui.SaveFolderButton.Add_Click({ Save-FolderPath })
+        $script:ui.FolderPathInput.Add_KeyDown({
+            param($sender, $e)
+            if ($e.Key -eq [System.Windows.Input.Key]::Return) {
+                Save-FolderPath
+                $e.Handled = $true
+            }
+        })
+        $script:ui.FolderButton.Add_Click({
+            try {
+                $owner = [System.Windows.Interop.WindowInteropHelper]::new($script:settingsForm).Handle
+                $picked = [SnipUI.FolderPicker]::Pick($owner, [string]$script:shotFolder)
+                if ($picked) { $script:ui.FolderPathInput.Text = $picked; Save-FolderPath }
+            }
+            catch {
                 [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Error') | Out-Null
-            } finally { $dialog.Dispose() }
+            }
         })
         $script:ui.OpenFolderButton.Add_Click({
             New-Item -ItemType Directory -Path $script:shotFolder -Force | Out-Null
@@ -1696,8 +1730,8 @@ try {
     function Show-Settings {
         if ($script:quickMenu) { $script:quickMenu.Hide() }
         if ($null -eq $script:settingsForm) { New-SettingsWindow }
-        $script:ui.FolderText.Text = [string]$script:shotFolder
-        $script:ui.FolderText.ToolTip = [string]$script:shotFolder
+        $script:ui.FolderPathInput.Text = [string]$script:shotFolder
+        $script:ui.FolderPathInput.ToolTip = [string]$script:shotFolder
         Sync-UiState
         $script:settingsForm.Show()
         $script:settingsForm.WindowState = [System.Windows.WindowState]::Normal
