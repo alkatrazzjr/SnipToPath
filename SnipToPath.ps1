@@ -19,6 +19,7 @@ $startupLink = Join-Path ([Environment]::GetFolderPath('Startup')) 'SnipToPath.l
 $menuLink = Join-Path ([Environment]::GetFolderPath('Programs')) 'SnipToPath.lnk'
 $psExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $wscriptExe = Join-Path $env:WINDIR 'System32\wscript.exe'
+$appUserModelId = 'SnipToPath.Desktop'
 $script:isExiting = $false
 
 
@@ -215,6 +216,83 @@ function Remove-OwnScreenshots([string]$folder) {
     return $count
 }
 
+function Set-ShortcutAppIdentity([string]$shortcutPath) {
+    # A shortcut must advertise the same explicit AppUserModelID as the hosted
+    # PowerShell window, otherwise Windows may group it under powershell.exe.
+    if (-not ('SnipApp.ShortcutIdentity' -as [type])) {
+        Add-Type -Namespace SnipApp -Name ShortcutIdentity -MemberDefinition @'
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+private struct PropertyKey {
+    public System.Guid FormatId;
+    public uint PropertyId;
+}
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+private struct PropertyVariant {
+    public ushort VariantType;
+    public ushort Reserved1, Reserved2, Reserved3;
+    public System.IntPtr Value;
+    public uint Padding;
+}
+[System.Runtime.InteropServices.ComImport]
+[System.Runtime.InteropServices.Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")]
+[System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+private interface IPropertyStore {
+    void GetCount(out uint count);
+    void GetAt(uint index, out PropertyKey key);
+    void GetValue(ref PropertyKey key, out PropertyVariant value);
+    void SetValue(ref PropertyKey key, ref PropertyVariant value);
+    void Commit();
+}
+[System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, PreserveSig = true)]
+private static extern int SHGetPropertyStoreFromParsingName(
+    [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string path,
+    System.IntPtr bindContext, uint flags, ref System.Guid iid,
+    [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Interface)] out IPropertyStore store);
+[System.Runtime.InteropServices.DllImport("ole32.dll", PreserveSig = true)]
+private static extern int PropVariantClear(ref PropertyVariant variant);
+private static PropertyKey AppIdKey() {
+    return new PropertyKey {
+        FormatId = new System.Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
+        PropertyId = 5
+    };
+}
+private static IPropertyStore Open(string path, uint flags) {
+    System.Guid iid = typeof(IPropertyStore).GUID;
+    IPropertyStore store;
+    System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(
+        SHGetPropertyStoreFromParsingName(path, System.IntPtr.Zero, flags, ref iid, out store));
+    return store;
+}
+public static void Set(string shortcutPath, string appId) {
+    IPropertyStore store = Open(shortcutPath, 2u); // GPS_READWRITE
+    try {
+        PropertyVariant value = new PropertyVariant {
+            VariantType = 31, // VT_LPWSTR
+            Value = System.Runtime.InteropServices.Marshal.StringToCoTaskMemUni(appId)
+        };
+        try {
+            PropertyKey key = AppIdKey();
+            store.SetValue(ref key, ref value);
+            store.Commit();
+        } finally { PropVariantClear(ref value); }
+    } finally { System.Runtime.InteropServices.Marshal.ReleaseComObject(store); }
+}
+public static string Get(string shortcutPath) {
+    IPropertyStore store = Open(shortcutPath, 0u);
+    try {
+        PropertyKey key = AppIdKey();
+        PropertyVariant value;
+        store.GetValue(ref key, out value);
+        try {
+            return value.VariantType == 31 ? System.Runtime.InteropServices.Marshal.PtrToStringUni(value.Value) : null;
+        } finally { PropVariantClear(ref value); }
+    } finally { System.Runtime.InteropServices.Marshal.ReleaseComObject(store); }
+}
+'@
+    }
+    [SnipApp.ShortcutIdentity]::Set($shortcutPath, $appUserModelId)
+}
+
 function Set-Startup([bool]$enable) {
     if ($enable) {
         $shell = New-Object -ComObject WScript.Shell
@@ -225,6 +303,8 @@ function Set-Startup([bool]$enable) {
         $shortcut.Description = 'SnipToPath: clipboard screenshots to file paths'
         if (Test-Path -LiteralPath $iconPath) { $shortcut.IconLocation = $iconPath }
         $shortcut.Save()
+        try { Set-ShortcutAppIdentity $startupLink }
+        catch { Write-Warning ('Could not assign SnipToPath taskbar identity to startup shortcut: ' + $_.Exception.Message) }
     }
     elseif (Test-Path -LiteralPath $startupLink) {
         Remove-Item -LiteralPath $startupLink -Force
@@ -966,6 +1046,8 @@ SoeyYFVopLZKLU4q5d5X8e64Q3+/Zwjbs2darF+/n860mj5LzubCHyoEALjiCqjTNdxyKGeaEJuamuHH
     $shortcut.Description = 'Screenshot paths for Codex CLI and Claude Code'
     $shortcut.IconLocation = $iconPath
     $shortcut.Save()
+    try { Set-ShortcutAppIdentity $menuLink }
+    catch { Write-Warning ('Could not assign SnipToPath taskbar identity to Start Menu shortcut: ' + $_.Exception.Message) }
 
     # First install: autostart ON. Update: preserve previous ON/OFF choice.
     if (-not $alreadyInstalled -or $previousStartup) { Set-Startup $true }
@@ -1055,6 +1137,13 @@ namespace SnipUI {
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y,
                                                int cx, int cy, uint flags);
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
+        public static extern int SetCurrentProcessExplicitAppUserModelID(
+            [MarshalAs(UnmanagedType.LPWStr)] string appId);
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
+        public static extern int GetCurrentProcessExplicitAppUserModelID(out IntPtr appId);
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        public static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
     }
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT {
@@ -1134,6 +1223,13 @@ namespace SnipUI {
     }
 }
 '@ -ReferencedAssemblies 'System.Drawing', 'System.Windows.Forms'
+
+# Set the process identity BEFORE creating WinForms/WPF windows. The executable
+# stays powershell.exe but the taskbar must treat this as SnipToPath.
+$identityResult = [SnipUI.Native]::SetCurrentProcessExplicitAppUserModelID($appUserModelId)
+if ($identityResult -lt 0) {
+    Write-Log ('Windows rejected SnipToPath taskbar identity: HRESULT {0:X8}' -f ([uint32]$identityResult))
+}
 
 $createdNew = $false
 $singleInstance = [Threading.Mutex]::new($true, 'Local\SnipToPathTray-v2', [ref]$createdNew)
@@ -1789,6 +1885,15 @@ try {
 '@
         $window = [Windows.Markup.XamlReader]::Parse($xaml)
         $window.Icon = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon($script:icon.Handle, [System.Windows.Int32Rect]::Empty, [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
+        # Explicitly set both large/small HWND icons for Windows taskbar
+        # fallbacks, including cases when WPF is hosted by powershell.exe.
+        $window.Add_SourceInitialized({
+            $windowHandle = [System.Windows.Interop.WindowInteropHelper]::new($script:settingsForm).Handle
+            if ($windowHandle -ne [IntPtr]::Zero) {
+                $null = [SnipUI.Native]::SendMessage($windowHandle, 0x80, [IntPtr]::Zero, $script:icon.Handle)
+                $null = [SnipUI.Native]::SendMessage($windowHandle, 0x80, [IntPtr]::new(1), $script:icon.Handle)
+            }
+        })
         $script:settingsForm = $window
         $script:ui = @{}
         foreach ($name in @('HeaderIcon','StatusDot','StatusName','EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch','FolderPathInput','FolderButton','SaveFolderButton','OpenFolderButton','ClearButton','CloseButton','DeleteDelayInput','SaveDelayButton','ThemeSystem','ThemeLight','ThemeDark','LanguageAuto','LanguageRu','LanguageEn')) {
