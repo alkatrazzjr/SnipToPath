@@ -26,7 +26,7 @@ function Get-Defaults {
         Enabled        = $true
         StartCleanup   = $true
         AutoDeleteOnCopy = $true
-        DeleteDelayMinutes = 5
+        DeleteDelaySeconds = 300
         QuotedPaths    = $true
         ThemeMode      = 'System'
         ScreenshotDir  = (Join-Path $env:TEMP 'SnipToPath')
@@ -38,7 +38,7 @@ function Load-Settings {
     if (Test-Path -LiteralPath $settingsPath) {
         try {
             $previous = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($key in @('Enabled', 'StartCleanup', 'AutoDeleteOnCopy', 'DeleteDelayMinutes', 'QuotedPaths', 'ScreenshotDir', 'ThemeMode')) {
+            foreach ($key in @('Enabled', 'StartCleanup', 'AutoDeleteOnCopy', 'DeleteDelaySeconds', 'QuotedPaths', 'ScreenshotDir', 'ThemeMode')) {
                 if ($null -ne $previous.PSObject.Properties[$key] -and $null -ne $previous.$key) {
                     $script:config[$key] = $previous.$key
                 }
@@ -46,9 +46,14 @@ function Load-Settings {
         }
         catch { Write-Warning 'Could not read settings.json; using defaults.' }
     }
-    try { $delay = [int]$script:config.DeleteDelayMinutes } catch { $delay = 5 }
-    if ($delay -notin @(5,15,30,60)) { $delay = 5 }
-    $script:config.DeleteDelayMinutes = $delay
+    # Migrate old minute-based settings without overwriting a newer seconds value.
+    if ($previous -and $null -eq $previous.PSObject.Properties['DeleteDelaySeconds'] -and
+        $null -ne $previous.PSObject.Properties['DeleteDelayMinutes']) {
+        $script:config.DeleteDelaySeconds = [int]$previous.DeleteDelayMinutes * 60
+    }
+    try { $delay = [int]$script:config.DeleteDelaySeconds } catch { $delay = 300 }
+    if ($delay -lt 1 -or $delay -gt 604800) { $delay = 300 }
+    $script:config.DeleteDelaySeconds = $delay
     if ([string]$script:config.ThemeMode -notin @('System','Light','Dark')) { $script:config.ThemeMode = 'System' }
     if ([string]::IsNullOrWhiteSpace([string]$script:config.ScreenshotDir)) {
         $script:config.ScreenshotDir = Join-Path $env:TEMP 'SnipToPath'
@@ -67,6 +72,29 @@ function Write-Log([string]$message) {
         Add-Content -LiteralPath (Join-Path $appDir 'errors.log') -Value ("{0} {1}" -f (Get-Date -Format 'o'), $message) -ErrorAction SilentlyContinue
     }
     catch {}
+}
+
+
+function Resolve-ScreenshotFolder([string]$candidate) {
+    if ([string]::IsNullOrWhiteSpace($candidate)) { throw 'Укажи папку для сохранения PNG.' }
+    $expanded = [Environment]::ExpandEnvironmentVariables($candidate.Trim().Trim('"'))
+    if (-not [IO.Path]::IsPathRooted($expanded)) { throw 'Укажи полный путь к папке.' }
+    $full = [IO.Path]::GetFullPath($expanded)
+    if ([IO.File]::Exists($full)) { throw 'По этому пути находится файл, а не папка.' }
+    [void][IO.Directory]::CreateDirectory($full)
+    $testFile = Join-Path $full ('.sniptopath-write-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    try { [IO.File]::WriteAllBytes($testFile, [byte[]](1)) }
+    finally { if ([IO.File]::Exists($testFile)) { [IO.File]::Delete($testFile) } }
+    return $full
+}
+
+function ConvertTo-DelaySeconds([string]$value) {
+    if ($value -notmatch '^[0-9]{1,7}$') { throw 'Укажи целое число секунд.' }
+    $parsed = 0
+    if (-not [int]::TryParse($value, [ref]$parsed) -or $parsed -lt 1 -or $parsed -gt 604800) {
+        throw 'Можно указать от 1 до 604800 секунд (7 дней).'
+    }
+    return $parsed
 }
 
 function Remove-OwnScreenshots([string]$folder) {
@@ -918,6 +946,87 @@ namespace SnipUI {
     public static class Native {
         [DllImport("dwmapi.dll", PreserveSig = true)]
         public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y,
+                                               int cx, int cy, uint flags);
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT {
+        public int Left, Top, Right, Bottom;
+    }
+    public static class WindowPosition {
+        public const uint NoSize = 0x0001;
+        public const uint NoZOrder = 0x0004;
+        public const uint NoActivate = 0x0010;
+    }
+    [ComImport, Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")]
+    public class FileOpenDialogClass { }
+    [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IShellItem {
+        void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
+        void GetParent(out IShellItem parent);
+        void GetDisplayName(uint name, out IntPtr value);
+        void GetAttributes(uint mask, out uint attributes);
+        void Compare(IShellItem other, uint hint, out int order);
+    }
+    [ComImport, Guid("D57C7288-D4AD-4768-BE02-9D969532D960"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IFileOpenDialog {
+        [PreserveSig] int Show(IntPtr parent);
+        void SetFileTypes(uint count, IntPtr types);
+        void SetFileTypeIndex(uint index);
+        void GetFileTypeIndex(out uint index);
+        void Advise(IntPtr events, out uint cookie);
+        void Unadvise(uint cookie);
+        void SetOptions(uint options);
+        void GetOptions(out uint options);
+        void SetDefaultFolder(IShellItem item);
+        void SetFolder(IShellItem item);
+        void GetFolder(out IShellItem item);
+        void GetCurrentSelection(out IShellItem item);
+        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string name);
+        void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string name);
+        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string title);
+        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+        void GetResult(out IShellItem item);
+    }
+    public static class FolderPicker {
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
+        private static extern int SHCreateItemFromParsingName(
+            [MarshalAs(UnmanagedType.LPWStr)] string path, IntPtr pbc, ref Guid iid,
+            [MarshalAs(UnmanagedType.Interface)] out IShellItem result);
+        public static string Pick(IntPtr owner, string initialFolder) {
+            IFileOpenDialog dialog = (IFileOpenDialog)new FileOpenDialogClass();
+            try {
+                uint options;
+                dialog.GetOptions(out options);
+                dialog.SetOptions(options | 0x20u | 0x40u | 0x800u);
+                dialog.SetTitle("Выбрать папку для PNG");
+                if (!String.IsNullOrWhiteSpace(initialFolder) && System.IO.Directory.Exists(initialFolder)) {
+                    IShellItem initial = null;
+                    Guid iid = typeof(IShellItem).GUID;
+                    if (SHCreateItemFromParsingName(initialFolder, IntPtr.Zero, ref iid, out initial) >= 0) {
+                        try { dialog.SetFolder(initial); }
+                        finally { if (initial != null) Marshal.ReleaseComObject(initial); }
+                    }
+                }
+                int hr = dialog.Show(owner);
+                if (hr == unchecked((int)0x800704C7)) return null;
+                if (hr < 0) Marshal.ThrowExceptionForHR(hr);
+                IShellItem selected;
+                dialog.GetResult(out selected);
+                try {
+                    IntPtr nativePath;
+                    selected.GetDisplayName(0x80058000u, out nativePath);
+                    try { return Marshal.PtrToStringUni(nativePath); }
+                    finally { Marshal.FreeCoTaskMem(nativePath); }
+                }
+                finally { Marshal.ReleaseComObject(selected); }
+            }
+            finally { Marshal.ReleaseComObject(dialog); }
+        }
     }
 }
 '@ -ReferencedAssemblies 'System.Drawing', 'System.Windows.Forms'
@@ -1045,9 +1154,10 @@ try {
             $script:ui.StartupSwitch.IsChecked = Test-Path -LiteralPath $startupLink
             $script:ui.CleanupSwitch.IsChecked = [bool]$script:config.StartCleanup
             $script:ui.QuotesSwitch.IsChecked = [bool]$script:config.QuotedPaths
-            foreach ($minutes in @(5,15,30,60)) {
-                $script:ui["Delay$minutes"].IsChecked = [int]$script:config.DeleteDelayMinutes -eq $minutes
-                $script:ui["Delay$minutes"].IsEnabled = [bool]$script:config.AutoDeleteOnCopy
+            $script:ui.DeleteDelayInput.IsEnabled = [bool]$script:config.AutoDeleteOnCopy
+            $script:ui.SaveDelayButton.IsEnabled = [bool]$script:config.AutoDeleteOnCopy
+            if (-not $script:ui.DeleteDelayInput.IsKeyboardFocusWithin) {
+                $script:ui.DeleteDelayInput.Text = [string]$script:config.DeleteDelaySeconds
             }
             foreach ($theme in @('System','Light','Dark')) {
                 $script:ui["Theme$theme"].IsChecked = [string]$script:config.ThemeMode -eq $theme
@@ -1059,10 +1169,7 @@ try {
             $script:quickUI.QuickStatus.Text = if ($script:config.Enabled) { 'Работает в фоне' } else { 'На паузе' }
             $activeColor = if ($script:config.Enabled) { '#19A878' } else { '#90939B' }
             $script:quickUI.QuickStatusDot.Fill = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($activeColor))
-            $script:quickUI.QuickDeleteHint.Text = ('Через {0} мин. после копирования' -f $script:config.DeleteDelayMinutes)
             $script:quickUI.QuickEnabled.IsChecked = [bool]$script:config.Enabled
-            $script:quickUI.QuickAutoDelete.IsChecked = [bool]$script:config.AutoDeleteOnCopy
-            $script:quickUI.QuickStartup.IsChecked = Test-Path -LiteralPath $startupLink
         }
     }
 
@@ -1074,7 +1181,7 @@ try {
         # could break long-running Codex / Claude tool calls.
         $script:pendingScreenshotDeletes.Add([pscustomobject]@{
             Path = $path
-            DeleteAfter = [DateTime]::UtcNow.AddMinutes([double]$script:config.DeleteDelayMinutes)
+            DeleteAfter = [DateTime]::UtcNow.AddSeconds([double]$script:config.DeleteDelaySeconds)
         })
     }
 
@@ -1109,6 +1216,24 @@ try {
         Sync-UiState
     }
 
+    function Get-TrayMenuPosition([int]$cursorX, [int]$cursorY, [int]$screenLeft, [int]$screenTop,
+            [int]$screenRight, [int]$screenBottom, [int]$menuWidth, [int]$menuHeight) {
+        # All arguments are in the same native screen coordinate space.
+        $padding = 8
+        $leftEdge = $screenLeft + $padding
+        $topEdge = $screenTop + $padding
+        $rightEdge = [Math]::Max($leftEdge, $screenRight - $menuWidth - $padding)
+        $bottomEdge = [Math]::Max($topEdge, $screenBottom - $menuHeight - $padding)
+        $left = [Math]::Max($leftEdge, [Math]::Min(($cursorX - $menuWidth + 36), $rightEdge))
+        $above = $cursorY - $menuHeight - 12
+        $below = $cursorY + 14
+        $preferred = if ($above -ge $topEdge) { $above }
+                     elseif ($below -le $bottomEdge) { $below }
+                     else { $above }
+        $top = [Math]::Max($topEdge, [Math]::Min($preferred, $bottomEdge))
+        return [System.Drawing.Point]::new([int]$left, [int]$top)
+    }
+
     function New-QuickMenu {
         # Own WPF window instead of WinForms ContextMenuStrip: consistent with settings,
         # proper rounded surfaces, large click targets and theme-aware switches.
@@ -1116,8 +1241,8 @@ try {
         $quickXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Width="372" SizeToContent="Height" WindowStyle="None" AllowsTransparency="True"
-        ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True" Background="Transparent"
+        Width="336" SizeToContent="Height" WindowStyle="None" AllowsTransparency="True"
+        ResizeMode="NoResize" ShowInTaskbar="False" ShowActivated="False" Topmost="True" Background="Transparent"
         WindowStartupLocation="Manual" FontFamily="Segoe UI" FontSize="13">
     <Window.Resources>
         <SolidColorBrush x:Key="CardBrush" Color="#FFFFFF"/>
@@ -1204,19 +1329,8 @@ try {
                 <StackPanel><TextBlock Text="Обрабатывать изображения" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}"/>
                     <TextBlock Text="Любая картинка в буфере → путь к PNG" Foreground="{DynamicResource SubtleBrush}" FontSize="11" Margin="0,3,0,0"/></StackPanel>
             </ToggleButton>
-            <ToggleButton x:Name="QuickAutoDelete" Style="{StaticResource QuickToggle}">
-                <StackPanel><TextBlock Text="Удалять предыдущий PNG" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}"/>
-                    <TextBlock x:Name="QuickDeleteHint" Text="Через 5 минут после копирования" Foreground="{DynamicResource SubtleBrush}" FontSize="11" Margin="0,3,0,0"/></StackPanel>
-            </ToggleButton>
-            <ToggleButton x:Name="QuickStartup" Style="{StaticResource QuickToggle}">
-                <StackPanel><TextBlock Text="Запускать с Windows" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}"/>
-                    <TextBlock Text="Работает в трее" Foreground="{DynamicResource SubtleBrush}" FontSize="11" Margin="0,3,0,0"/></StackPanel>
-            </ToggleButton>
             <Border Background="{DynamicResource LineBrush}" Height="1" Margin="3,9,3,8"/>
             <Button x:Name="QuickSettings" Style="{StaticResource QuickAction}" Content="Настройки"/>
-            <Button x:Name="QuickOpenFolder" Style="{StaticResource QuickAction}" Content="Открыть папку PNG"/>
-            <Button x:Name="QuickClear" Style="{StaticResource QuickAction}" Content="Очистить временные PNG"/>
-            <Border Background="{DynamicResource LineBrush}" Height="1" Margin="3,8,3,8"/>
             <Button x:Name="QuickExit" Style="{StaticResource QuickAction}" Content="Выход"/>
         </StackPanel>
     </Border>
@@ -1225,7 +1339,7 @@ try {
         $window = [Windows.Markup.XamlReader]::Parse($quickXaml)
         $script:quickMenu = $window
         $script:quickUI = @{}
-        foreach ($name in @('QuickIcon','QuickStatusDot','QuickStatus','QuickDeleteHint','QuickEnabled','QuickAutoDelete','QuickStartup','QuickSettings','QuickOpenFolder','QuickClear','QuickExit')) {
+        foreach ($name in @('QuickIcon','QuickStatusDot','QuickStatus','QuickEnabled','QuickSettings','QuickExit')) {
             $script:quickUI[$name] = $window.FindName($name)
             if (-not $script:quickUI[$name]) { throw ('Quick menu element not found: ' + $name) }
         }
@@ -1235,29 +1349,7 @@ try {
             $script:config.Enabled = [bool]$script:quickUI.QuickEnabled.IsChecked
             Save-Settings; Sync-UiState
         })
-        $script:quickUI.QuickAutoDelete.Add_Click({
-            $script:config.AutoDeleteOnCopy = [bool]$script:quickUI.QuickAutoDelete.IsChecked
-            if (-not $script:config.AutoDeleteOnCopy) { $script:pendingScreenshotDeletes.Clear() }
-            Save-Settings; Sync-UiState
-        })
-        $script:quickUI.QuickStartup.Add_Click({
-            try { Set-Startup ([bool]$script:quickUI.QuickStartup.IsChecked) }
-            catch { Write-Log $_.Exception.Message; [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath') | Out-Null }
-            Sync-UiState
-        })
         $script:quickUI.QuickSettings.Add_Click({ $script:quickMenu.Hide(); Show-Settings })
-        $script:quickUI.QuickOpenFolder.Add_Click({
-            $script:quickMenu.Hide()
-            New-Item -ItemType Directory -Path $script:shotFolder -Force | Out-Null
-            Start-Process -FilePath explorer.exe -ArgumentList ('"{0}"' -f $script:shotFolder)
-        })
-        $script:quickUI.QuickClear.Add_Click({
-            $script:quickMenu.Hide()
-            $removed = Remove-OwnScreenshots $script:shotFolder
-            $script:lastScreenshotPath = $null
-            $script:pendingScreenshotDeletes.Clear()
-            $script:notify.ShowBalloonTip(1500, 'SnipToPath', ('Удалено PNG: {0}' -f $removed), [System.Windows.Forms.ToolTipIcon]::Info)
-        })
         $script:quickUI.QuickExit.Add_Click({ Exit-SnipToPath })
         $window.Add_Deactivated({ if (-not $script:isExiting) { $script:quickMenu.Hide() } })
         Sync-UiState
@@ -1269,28 +1361,33 @@ try {
         if ($script:quickMenu.IsVisible) { $script:quickMenu.Hide(); return }
         Sync-UiState
         Apply-Theme
-        # Keep the window on the clicked monitor, including non-primary displays.
-        $mouse = [System.Windows.Forms.Cursor]::Position
-        $monitor = [System.Windows.Forms.Screen]::FromPoint($mouse).WorkingArea
-        $helper = [System.Windows.Interop.WindowInteropHelper]::new($script:quickMenu)
-        $null = $helper.EnsureHandle()
-        $source = [System.Windows.PresentationSource]::FromVisual($script:quickMenu)
-        $scaleX = 1.0; $scaleY = 1.0
-        if ($source -and $source.CompositionTarget) {
-            $scaleX = [double]$source.CompositionTarget.TransformToDevice.M11
-            $scaleY = [double]$source.CompositionTarget.TransformToDevice.M22
+        # Place the actual HWND using Win32 coordinates. Mixing WPF DIPs and
+        # physical Screen.WorkingArea caused clipping on multi-DPI monitors.
+        $script:quickMenu.Opacity = 0
+        try {
+            $script:quickMenu.Show()
+            $script:quickMenu.UpdateLayout()
+            $helper = [System.Windows.Interop.WindowInteropHelper]::new($script:quickMenu)
+            $hwnd = $helper.Handle
+            $rect = [SnipUI.RECT]::new()
+            if (-not [SnipUI.Native]::GetWindowRect($hwnd, [ref]$rect)) {
+                throw 'Не удалось определить размер меню.'
+            }
+            $mouse = [System.Windows.Forms.Cursor]::Position
+            $working = [System.Windows.Forms.Screen]::FromPoint($mouse).WorkingArea
+            $position = Get-TrayMenuPosition $mouse.X $mouse.Y $working.Left $working.Top $working.Right $working.Bottom ($rect.Right - $rect.Left) ($rect.Bottom - $rect.Top)
+            $flags = [SnipUI.WindowPosition]::NoSize -bor [SnipUI.WindowPosition]::NoZOrder -bor [SnipUI.WindowPosition]::NoActivate
+            if (-not [SnipUI.Native]::SetWindowPos($hwnd, [IntPtr]::Zero, $position.X, $position.Y, 0, 0, [uint32]$flags)) {
+                throw 'Не удалось расположить меню на экране.'
+            }
+            $script:quickMenu.Opacity = 1
+            $null = $script:quickMenu.Activate()
         }
-        $script:quickMenu.Measure([System.Windows.Size]::new($script:quickMenu.Width, [double]::PositiveInfinity))
-        $widthPx = [int][Math]::Ceiling($script:quickMenu.Width * $scaleX)
-        $heightDip = [Math]::Max(1, [double]$script:quickMenu.DesiredSize.Height)
-        $heightPx = [int][Math]::Ceiling($heightDip * $scaleY)
-        $xPx = [Math]::Max($monitor.Left, [Math]::Min($mouse.X - $widthPx + 50, $monitor.Right - $widthPx))
-        $yPx = if ($mouse.Y + 16 + $heightPx -le $monitor.Bottom) { $mouse.Y + 16 } else { $mouse.Y - $heightPx - 12 }
-        $yPx = [Math]::Max($monitor.Top, [Math]::Min($yPx, $monitor.Bottom - $heightPx))
-        $script:quickMenu.Left = $xPx / $scaleX
-        $script:quickMenu.Top = $yPx / $scaleY
-        $script:quickMenu.Show()
-        $null = $script:quickMenu.Activate()
+        catch {
+            $script:quickMenu.Opacity = 1
+            $script:quickMenu.Hide()
+            throw
+        }
     }
 
     function New-SettingsWindow {
@@ -1298,7 +1395,7 @@ try {
         $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SnipToPath — Настройки" Width="720" Height="640" MinWidth="670" MinHeight="555"
+        Title="SnipToPath — Настройки" Width="720" Height="672" MinWidth="670" MinHeight="555"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource PageBrush}"
         FontFamily="Segoe UI" FontSize="13" ShowInTaskbar="True">
     <Window.Resources>
@@ -1448,14 +1545,15 @@ try {
                                 <ToggleButton x:Name="AutoDeleteSwitch" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center"/>
                             </Grid>
                             <Border Background="{DynamicResource LineBrush}" Height="1" Margin="0,12"/>
-                            <TextBlock Text="Задержка удаления" FontWeight="SemiBold" Margin="0,0,0,7"/>
-                            <StackPanel Orientation="Horizontal">
-                                <ToggleButton x:Name="Delay5" Content="5 мин" Style="{StaticResource Choice}"/>
-                                <ToggleButton x:Name="Delay15" Content="15 мин" Style="{StaticResource Choice}"/>
-                                <ToggleButton x:Name="Delay30" Content="30 мин" Style="{StaticResource Choice}"/>
-                                <ToggleButton x:Name="Delay60" Content="60 мин" Style="{StaticResource Choice}" Margin="0"/>
-                            </StackPanel>
-                            <TextBlock Text="Файл остаётся доступным агенту до удаления" Style="{StaticResource Hint}" Margin="0,7,0,0"/>
+                            <TextBlock Text="Задержка удаления, секунд" FontWeight="SemiBold" Margin="0,0,0,7"/>
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBox x:Name="DeleteDelayInput" Grid.Column="0" Height="35" FontSize="13" Padding="10,6"
+                                         BorderBrush="{DynamicResource LineBrush}" Background="{DynamicResource AltBrush}"
+                                         Foreground="{DynamicResource TextBrush}" VerticalContentAlignment="Center"/>
+                                <Button x:Name="SaveDelayButton" Grid.Column="1" Content="Применить" Height="35"
+                                        Margin="8,0,0,0" Style="{StaticResource SoftButton}"/>
+                            </Grid>
+                            <TextBlock Text="От 1 секунды до 7 дней (604800)." Style="{StaticResource Hint}" Margin="0,7,0,0"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -1478,9 +1576,13 @@ try {
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
                             <TextBlock Text="Папка PNG" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                <Border Grid.Column="0" Background="{DynamicResource AltBrush}" CornerRadius="8" Padding="9,8" Margin="0,0,6,0"><TextBlock x:Name="FolderText" FontSize="11.5" Foreground="{DynamicResource SubtleBrush}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/></Border>
-                                <Button x:Name="FolderButton" Grid.Column="1" Content="Изменить" Style="{StaticResource SoftButton}"/>
+                            <TextBox x:Name="FolderPathInput" Height="35" FontSize="11.5" Padding="9,5" VerticalContentAlignment="Center"
+                                     BorderBrush="{DynamicResource LineBrush}" Background="{DynamicResource AltBrush}"
+                                     Foreground="{DynamicResource TextBrush}"/>
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <Button x:Name="FolderButton" Grid.Column="1" Content="Обзор…" Height="32" Style="{StaticResource SoftButton}" Margin="0,0,6,0"/>
+                                <Button x:Name="SaveFolderButton" Grid.Column="2" Content="Сохранить" Height="32" Style="{StaticResource SoftButton}"/>
                             </Grid>
                         </StackPanel>
                     </Border>
@@ -1505,7 +1607,7 @@ try {
         $window.Icon = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon($script:icon.Handle, [System.Windows.Int32Rect]::Empty, [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
         $script:settingsForm = $window
         $script:ui = @{}
-        foreach ($name in @('HeaderIcon','StatusDot','StatusName','EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch','FolderText','FolderButton','OpenFolderButton','ClearButton','CloseButton','Delay5','Delay15','Delay30','Delay60','ThemeSystem','ThemeLight','ThemeDark')) {
+        foreach ($name in @('HeaderIcon','StatusDot','StatusName','EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch','FolderPathInput','FolderButton','SaveFolderButton','OpenFolderButton','ClearButton','CloseButton','DeleteDelayInput','SaveDelayButton','ThemeSystem','ThemeLight','ThemeDark')) {
             $script:ui[$name] = $window.FindName($name)
             if (-not $script:ui[$name]) { throw ('Элемент интерфейса не найден: ' + $name) }
         }
@@ -1514,10 +1616,10 @@ try {
         $script:ui.QuotesSwitch.IsChecked = [bool]$script:config.QuotedPaths
         $script:ui.StartupSwitch.IsChecked = Test-Path -LiteralPath $startupLink
         $script:ui.CleanupSwitch.IsChecked = [bool]$script:config.StartCleanup
-        $script:ui.FolderText.Text = [string]$script:config.ScreenshotDir
+        $script:ui.FolderPathInput.Text = [string]$script:config.ScreenshotDir
         $script:ui.HeaderIcon.Source = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon(
             $script:icon.Handle, [System.Windows.Int32Rect]::Empty, [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
-        $script:ui.FolderText.ToolTip = [string]$script:config.ScreenshotDir
+        $script:ui.FolderPathInput.ToolTip = [string]$script:config.ScreenshotDir
 
         $script:ui.EnabledSwitch.Add_Click({
             $script:config.Enabled = [bool]$script:ui.EnabledSwitch.IsChecked
@@ -1544,15 +1646,30 @@ try {
             $script:config.StartCleanup = [bool]$script:ui.CleanupSwitch.IsChecked
             Save-Settings
         })
-        foreach ($minutes in @(5,15,30,60)) {
-            $choice = $script:ui["Delay$minutes"]
-            $choice.Tag = $minutes
-            $choice.Add_Click({
-                param($sender, $eventArgs)
-                $script:config.DeleteDelayMinutes = [int]$sender.Tag
-                Save-Settings; Sync-UiState
-            })
-        }
+        $script:ui.SaveDelayButton.Add_Click({
+            try {
+                $seconds = ConvertTo-DelaySeconds ([string]$script:ui.DeleteDelayInput.Text)
+                if ($seconds -lt 30) {
+                    $answer = [System.Windows.MessageBox]::Show(
+                        'При задержке меньше 30 секунд агент может не успеть открыть PNG. Всё равно сохранить?',
+                        'SnipToPath', 'YesNo', 'Warning')
+                    if ($answer -ne [System.Windows.MessageBoxResult]::Yes) { return }
+                }
+                $script:config.DeleteDelaySeconds = $seconds
+                Save-Settings
+                Sync-UiState
+            }
+            catch {
+                [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Warning') | Out-Null
+            }
+        })
+        $script:ui.DeleteDelayInput.Add_KeyDown({
+            param($sender, $e)
+            if ($e.Key -eq [System.Windows.Input.Key]::Return) {
+                $script:ui.SaveDelayButton.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))
+                $e.Handled = $true
+            }
+        })
         foreach ($theme in @('System','Light','Dark')) {
             $choice = $script:ui["Theme$theme"]
             $choice.Tag = $theme
@@ -1561,23 +1678,36 @@ try {
                 Set-ThemeMode ([string]$sender.Tag)
             })
         }
-        $script:ui.FolderButton.Add_Click({
-            $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+        $script:saveFolderPath = {
             try {
-                $dialog.Description = 'Папка для временных PNG'
-                if (Test-Path -LiteralPath $script:shotFolder -PathType Container) { $dialog.SelectedPath = $script:shotFolder }
-                if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-                    $folder = $dialog.SelectedPath
-                    New-Item -ItemType Directory -Path $folder -Force | Out-Null
-                    $script:config.ScreenshotDir = $folder
-                    $script:shotFolder = $folder
-                    $script:ui.FolderText.Text = $folder
-                    $script:ui.FolderText.ToolTip = $folder
-                    Save-Settings
-                }
-            } catch {
+                $folder = Resolve-ScreenshotFolder ([string]$script:ui.FolderPathInput.Text)
+                $script:config.ScreenshotDir = $folder
+                $script:shotFolder = $folder
+                Save-Settings
+                $script:ui.FolderPathInput.Text = $folder
+                $script:ui.FolderPathInput.ToolTip = $folder
+            }
+            catch {
+                [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Warning') | Out-Null
+            }
+        }
+        $script:ui.SaveFolderButton.Add_Click({ & $script:saveFolderPath })
+        $script:ui.FolderPathInput.Add_KeyDown({
+            param($sender, $e)
+            if ($e.Key -eq [System.Windows.Input.Key]::Return) {
+                & $script:saveFolderPath
+                $e.Handled = $true
+            }
+        })
+        $script:ui.FolderButton.Add_Click({
+            try {
+                $owner = [System.Windows.Interop.WindowInteropHelper]::new($script:settingsForm).Handle
+                $picked = [SnipUI.FolderPicker]::Pick($owner, [string]$script:shotFolder)
+                if ($picked) { $script:ui.FolderPathInput.Text = $picked; & $script:saveFolderPath }
+            }
+            catch {
                 [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Error') | Out-Null
-            } finally { $dialog.Dispose() }
+            }
         })
         $script:ui.OpenFolderButton.Add_Click({
             New-Item -ItemType Directory -Path $script:shotFolder -Force | Out-Null
@@ -1600,8 +1730,8 @@ try {
     function Show-Settings {
         if ($script:quickMenu) { $script:quickMenu.Hide() }
         if ($null -eq $script:settingsForm) { New-SettingsWindow }
-        $script:ui.FolderText.Text = [string]$script:shotFolder
-        $script:ui.FolderText.ToolTip = [string]$script:shotFolder
+        $script:ui.FolderPathInput.Text = [string]$script:shotFolder
+        $script:ui.FolderPathInput.ToolTip = [string]$script:shotFolder
         Sync-UiState
         $script:settingsForm.Show()
         $script:settingsForm.WindowState = [System.Windows.WindowState]::Normal

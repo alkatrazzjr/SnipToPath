@@ -30,8 +30,8 @@ jobs:
                 $color = [Windows.Media.ColorConverter]::ConvertFromString($palette[$name])
                 $w.Resources[$name] = [Windows.Media.SolidColorBrush]::new($color)
               }
-              $width = if ($windowType -eq 'xaml') { 696 } else { 372 }
-              $height = if ($windowType -eq 'xaml') { 600 } else { 475 }
+              $width = if ($windowType -eq 'xaml') { 720 } else { 336 }
+              $height = if ($windowType -eq 'xaml') { 652 } else { 330 }
               $visual = $w.Content
               $size = [Windows.Size]::new($width, $height)
               $visual.Measure($size)
