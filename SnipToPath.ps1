@@ -248,10 +248,6 @@ private static extern int SHGetPropertyStoreFromParsingName(
     [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string path,
     System.IntPtr bindContext, uint flags, ref System.Guid iid,
     [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Interface)] out IPropertyStore store);
-[System.Runtime.InteropServices.DllImport("propsys.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, PreserveSig = true)]
-private static extern int InitPropVariantFromString(
-    [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string value,
-    out PropertyVariant variant);
 [System.Runtime.InteropServices.DllImport("ole32.dll", PreserveSig = true)]
 private static extern int PropVariantClear(ref PropertyVariant variant);
 private static PropertyKey AppIdKey() {
@@ -270,9 +266,10 @@ private static IPropertyStore Open(string path, uint flags) {
 public static void Set(string shortcutPath, string appId) {
     IPropertyStore store = Open(shortcutPath, 2u); // GPS_READWRITE
     try {
-        PropertyVariant value;
-        System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(
-            InitPropVariantFromString(appId, out value));
+        PropertyVariant value = new PropertyVariant {
+            VariantType = 31, // VT_LPWSTR
+            Value = System.Runtime.InteropServices.Marshal.StringToCoTaskMemUni(appId)
+        };
         try {
             PropertyKey key = AppIdKey();
             store.SetValue(ref key, ref value);
