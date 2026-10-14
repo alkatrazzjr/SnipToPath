@@ -1678,7 +1678,7 @@ try {
                 Set-ThemeMode ([string]$sender.Tag)
             })
         }
-        function Save-FolderPath {
+        $script:saveFolderPath = {
             try {
                 $folder = Resolve-ScreenshotFolder ([string]$script:ui.FolderPathInput.Text)
                 $script:config.ScreenshotDir = $folder
@@ -1691,11 +1691,11 @@ try {
                 [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Warning') | Out-Null
             }
         }
-        $script:ui.SaveFolderButton.Add_Click({ Save-FolderPath })
+        $script:ui.SaveFolderButton.Add_Click({ & $script:saveFolderPath })
         $script:ui.FolderPathInput.Add_KeyDown({
             param($sender, $e)
             if ($e.Key -eq [System.Windows.Input.Key]::Return) {
-                Save-FolderPath
+                & $script:saveFolderPath
                 $e.Handled = $true
             }
         })
@@ -1703,7 +1703,7 @@ try {
             try {
                 $owner = [System.Windows.Interop.WindowInteropHelper]::new($script:settingsForm).Handle
                 $picked = [SnipUI.FolderPicker]::Pick($owner, [string]$script:shotFolder)
-                if ($picked) { $script:ui.FolderPathInput.Text = $picked; Save-FolderPath }
+                if ($picked) { $script:ui.FolderPathInput.Text = $picked; & $script:saveFolderPath }
             }
             catch {
                 [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Error') | Out-Null
