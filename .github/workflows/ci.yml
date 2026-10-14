@@ -46,3 +46,46 @@ jobs:
           $embedded = [Convert]::FromBase64String(($matchIcon.Groups[1].Value -replace '\s', ''))
           if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$icon, [byte[]]$embedded)) { throw 'Embedded icon differs from assets/SnipToPath.ico' }
           Write-Host 'PASS embedded icon matches asset'
+          # Verify the refactored settings UI actually declares all its interactive controls.
+          $mainMatch = [regex]::Match($source, '(?s)\$xaml\s*=\s*@''\r?\n(.*?)\r?\n''@')
+          $settingsWindow = [Windows.Markup.XamlReader]::Parse($mainMatch.Groups[1].Value)
+          foreach ($name in @('EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch',
+              'Delay5','Delay15','Delay30','Delay60','ThemeSystem','ThemeLight','ThemeDark',
+              'OpenFolderButton','ClearButton','CloseButton','FolderButton','StatusDot')) {
+            if (-not $settingsWindow.FindName($name)) { throw "Missing UI control: $name" }
+          }
+          if ($settingsWindow.Height -gt 650 -or $settingsWindow.Width -gt 760) { throw 'Settings window must be compact' }
+          $section = $settingsWindow.Resources['Section']
+          if (-not ($section.Setters | Where-Object { $_.Property.Name -eq 'Foreground' })) {
+            throw 'Section foreground must follow Windows theme'
+          }
+          $settingsWindow.Close()
+          Write-Host 'PASS settings layout and controls'
+
+          # Exercise delayed cleanup without a live clipboard or a UI session.
+          $tokens = $null; $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
+          foreach ($fname in @('Queue-PreviousScreenshot', 'Invoke-PendingScreenshotCleanup')) {
+            $functions = @($ast.FindAll({ param($node)
+              $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $fname
+            }, $true))
+            if ($functions.Count -ne 1) { throw "Expected a single $fname function" }
+            Invoke-Expression $functions[0].Extent.Text
+          }
+          $script:config = @{ AutoDeleteOnCopy = $true; DeleteDelayMinutes = 15 }
+          $script:pendingScreenshotDeletes = New-Object 'System.Collections.Generic.List[object]'
+          $testPath = Join-Path ([IO.Path]::GetTempPath()) ('sniptopath-ci-' + [Guid]::NewGuid().ToString('N') + '.png')
+          [IO.File]::WriteAllBytes($testPath, [byte[]](1,2,3,4))
+          try {
+            $script:lastScreenshotPath = $testPath
+            Queue-PreviousScreenshot
+            if ($script:pendingScreenshotDeletes.Count -ne 1) { throw 'Missing scheduled cleanup' }
+            $minutes = ($script:pendingScreenshotDeletes[0].DeleteAfter - [DateTime]::UtcNow).TotalMinutes
+            if ($minutes -lt 14 -or $minutes -gt 16) { throw 'Incorrect cleanup delay' }
+            $script:pendingScreenshotDeletes[0].DeleteAfter = [DateTime]::UtcNow.AddSeconds(-1)
+            Invoke-PendingScreenshotCleanup
+            if (Test-Path -LiteralPath $testPath) { throw 'Expired screenshot was not deleted' }
+            Write-Host 'PASS delayed screenshot cleanup'
+          } finally {
+            Remove-Item -LiteralPath $testPath -Force -ErrorAction SilentlyContinue
+          }

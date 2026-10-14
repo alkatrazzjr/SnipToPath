@@ -25,6 +25,7 @@ function Get-Defaults {
         Enabled        = $true
         StartCleanup   = $true
         AutoDeleteOnCopy = $true
+        DeleteDelayMinutes = 5
         QuotedPaths    = $true
         ThemeMode      = 'System'
         ScreenshotDir  = (Join-Path $env:TEMP 'SnipToPath')
@@ -36,7 +37,7 @@ function Load-Settings {
     if (Test-Path -LiteralPath $settingsPath) {
         try {
             $previous = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($key in @('Enabled', 'StartCleanup', 'AutoDeleteOnCopy', 'QuotedPaths', 'ScreenshotDir', 'ThemeMode')) {
+            foreach ($key in @('Enabled', 'StartCleanup', 'AutoDeleteOnCopy', 'DeleteDelayMinutes', 'QuotedPaths', 'ScreenshotDir', 'ThemeMode')) {
                 if ($null -ne $previous.PSObject.Properties[$key] -and $null -ne $previous.$key) {
                     $script:config[$key] = $previous.$key
                 }
@@ -44,6 +45,9 @@ function Load-Settings {
         }
         catch { Write-Warning 'Could not read settings.json; using defaults.' }
     }
+    try { $delay = [int]$script:config.DeleteDelayMinutes } catch { $delay = 5 }
+    if ($delay -notin @(5,15,30,60)) { $delay = 5 }
+    $script:config.DeleteDelayMinutes = $delay
     if ([string]$script:config.ThemeMode -notin @('System','Light','Dark')) { $script:config.ThemeMode = 'System' }
     if ([string]::IsNullOrWhiteSpace([string]$script:config.ScreenshotDir)) {
         $script:config.ScreenshotDir = Join-Path $env:TEMP 'SnipToPath'
@@ -880,7 +884,7 @@ try {
             $colors = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\DWM' -ErrorAction Stop
             if ($null -ne $colors.AccentColor) {
                 $bytes = [BitConverter]::GetBytes([int]$colors.AccentColor)
-                $r = [int]$bytes[0]; $g = [int]$bytes[1]; $b = [int]$bytes[2]
+                $r = [int]$bytes[2]; $g = [int]$bytes[1]; $b = [int]$bytes[0]
                 # Ignore implausibly dark/high-contrast accents for legibility.
                 if (($r + $g + $b) -gt 95 -and ($r + $g + $b) -lt 680) {
                     $accent = '#{0:X2}{1:X2}{2:X2}' -f $r, $g, $b
@@ -935,15 +939,26 @@ try {
         $script:notify.Text = if ($script:config.Enabled) { 'SnipToPath - работает' } else { 'SnipToPath - пауза' }
         if ($script:settingsForm) {
             $script:ui.StatusName.Text = if ($script:config.Enabled) { 'Работает' } else { 'На паузе' }
-            $script:ui.StatusHint.Text = if ($script:config.Enabled) {
-                'Скопируйте изображение и вставьте путь в консоль.'
-            } else { 'Обработка изображений приостановлена.' }
             $script:ui.EnabledSwitch.IsChecked = [bool]$script:config.Enabled
             $script:ui.AutoDeleteSwitch.IsChecked = [bool]$script:config.AutoDeleteOnCopy
             $script:ui.StartupSwitch.IsChecked = Test-Path -LiteralPath $startupLink
+            $script:ui.CleanupSwitch.IsChecked = [bool]$script:config.StartCleanup
+            $script:ui.QuotesSwitch.IsChecked = [bool]$script:config.QuotedPaths
+            foreach ($minutes in @(5,15,30,60)) {
+                $script:ui["Delay$minutes"].IsChecked = [int]$script:config.DeleteDelayMinutes -eq $minutes
+                $script:ui["Delay$minutes"].IsEnabled = [bool]$script:config.AutoDeleteOnCopy
+            }
+            foreach ($theme in @('System','Light','Dark')) {
+                $script:ui["Theme$theme"].IsChecked = [string]$script:config.ThemeMode -eq $theme
+            }
+            $activeColor = if ($script:config.Enabled) { '#19A878' } else { '#90939B' }
+            $script:ui.StatusDot.Fill = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($activeColor))
         }
         if ($script:quickMenu) {
             $script:quickUI.QuickStatus.Text = if ($script:config.Enabled) { 'Работает в фоне' } else { 'На паузе' }
+            $activeColor = if ($script:config.Enabled) { '#19A878' } else { '#90939B' }
+            $script:quickUI.QuickStatusDot.Fill = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($activeColor))
+            $script:quickUI.QuickDeleteHint.Text = ('Через {0} мин. после копирования' -f $script:config.DeleteDelayMinutes)
             $script:quickUI.QuickEnabled.IsChecked = [bool]$script:config.Enabled
             $script:quickUI.QuickAutoDelete.IsChecked = [bool]$script:config.AutoDeleteOnCopy
             $script:quickUI.QuickStartup.IsChecked = Test-Path -LiteralPath $startupLink
@@ -958,7 +973,7 @@ try {
         # could break long-running Codex / Claude tool calls.
         $script:pendingScreenshotDeletes.Add([pscustomobject]@{
             Path = $path
-            DeleteAfter = [DateTime]::UtcNow.AddMinutes(5)
+            DeleteAfter = [DateTime]::UtcNow.AddMinutes([double]$script:config.DeleteDelayMinutes)
         })
     }
 
@@ -990,12 +1005,7 @@ try {
         Save-Settings
         Sync-UiState
         Apply-Theme
-        if ($script:settingsForm) {
-            $newIndex = switch ($mode) { 'Light' {1} 'Dark' {2} default {0} }
-            if ($script:ui.ThemeChoice.SelectedIndex -ne $newIndex) {
-                $script:ui.ThemeChoice.SelectedIndex = $newIndex
-            }
-        }
+        Sync-UiState
     }
 
     function New-QuickMenu {
@@ -1083,7 +1093,7 @@ try {
                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
                     <TextBlock Text="SnipToPath" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}"/>
                     <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                        <Ellipse Width="6" Height="6" Fill="{DynamicResource AccentBrush}" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                        <Ellipse x:Name="QuickStatusDot" Width="6" Height="6" Fill="{DynamicResource AccentBrush}" Margin="0,0,7,0" VerticalAlignment="Center"/>
                         <TextBlock x:Name="QuickStatus" Text="Работает в фоне" Foreground="{DynamicResource SubtleBrush}" FontSize="11"/>
                     </StackPanel>
                 </StackPanel>
@@ -1091,11 +1101,11 @@ try {
             <Border Background="{DynamicResource LineBrush}" Height="1" Margin="3,0,3,8"/>
             <ToggleButton x:Name="QuickEnabled" Style="{StaticResource QuickToggle}">
                 <StackPanel><TextBlock Text="Обрабатывать изображения" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}"/>
-                    <TextBlock Text="Путь к PNG вместо картинки" Foreground="{DynamicResource SubtleBrush}" FontSize="11" Margin="0,3,0,0"/></StackPanel>
+                    <TextBlock Text="Любая картинка в буфере → путь к PNG" Foreground="{DynamicResource SubtleBrush}" FontSize="11" Margin="0,3,0,0"/></StackPanel>
             </ToggleButton>
             <ToggleButton x:Name="QuickAutoDelete" Style="{StaticResource QuickToggle}">
-                <StackPanel><TextBlock Text="Очищать после копирования" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}"/>
-                    <TextBlock Text="С задержкой 5 минут" Foreground="{DynamicResource SubtleBrush}" FontSize="11" Margin="0,3,0,0"/></StackPanel>
+                <StackPanel><TextBlock Text="Удалять предыдущий PNG" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}"/>
+                    <TextBlock x:Name="QuickDeleteHint" Text="Через 5 минут после копирования" Foreground="{DynamicResource SubtleBrush}" FontSize="11" Margin="0,3,0,0"/></StackPanel>
             </ToggleButton>
             <ToggleButton x:Name="QuickStartup" Style="{StaticResource QuickToggle}">
                 <StackPanel><TextBlock Text="Запускать с Windows" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}"/>
@@ -1114,7 +1124,7 @@ try {
         $window = [Windows.Markup.XamlReader]::Parse($quickXaml)
         $script:quickMenu = $window
         $script:quickUI = @{}
-        foreach ($name in @('QuickIcon','QuickStatus','QuickEnabled','QuickAutoDelete','QuickStartup','QuickSettings','QuickOpenFolder','QuickClear','QuickExit')) {
+        foreach ($name in @('QuickIcon','QuickStatusDot','QuickStatus','QuickDeleteHint','QuickEnabled','QuickAutoDelete','QuickStartup','QuickSettings','QuickOpenFolder','QuickClear','QuickExit')) {
             $script:quickUI[$name] = $window.FindName($name)
             if (-not $script:quickUI[$name]) { throw ('Quick menu element not found: ' + $name) }
         }
@@ -1187,7 +1197,7 @@ try {
         $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SnipToPath — Настройки" Width="650" Height="770" MinWidth="600" MinHeight="620"
+        Title="SnipToPath — Настройки" Width="720" Height="615" MinWidth="670" MinHeight="555"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource PageBrush}"
         FontFamily="Segoe UI" FontSize="13" ShowInTaskbar="True">
     <Window.Resources>
@@ -1204,29 +1214,48 @@ try {
         <SolidColorBrush x:Key="AccentSubtleBrush" Color="#E6F0FA"/>
         <SolidColorBrush x:Key="OffBrush" Color="#898C95"/>
         <SolidColorBrush x:Key="SwitchThumbBrush" Color="#FFFFFF"/>
-        <SolidColorBrush x:Key="WindowStrokeBrush" Color="#E5E6EB"/>
-        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="{DynamicResource TextBrush}"/></Style>
-        <Style x:Key="Hint" TargetType="TextBlock"><Setter Property="Foreground" Value="{DynamicResource SubtleBrush}"/><Setter Property="FontSize" Value="12"/><Setter Property="TextWrapping" Value="Wrap"/></Style>
-        <Style x:Key="Section" TargetType="TextBlock"><Setter Property="FontSize" Value="13"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Margin" Value="0,0,0,12"/></Style>
-        <Style x:Key="Card" TargetType="Border"><Setter Property="Background" Value="{DynamicResource CardBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/><Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="11"/><Setter Property="Padding" Value="18,15"/><Setter Property="Margin" Value="0,0,0,18"/></Style>
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+        </Style>
+        <Style x:Key="Hint" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource SubtleBrush}"/>
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="Section" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="1,0,0,9"/>
+        </Style>
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource CardBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Padding" Value="15"/>
+            <Setter Property="Margin" Value="0,0,0,15"/>
+        </Style>
         <Style x:Key="Switch" TargetType="ToggleButton">
-            <Setter Property="Width" Value="46"/><Setter Property="Height" Value="25"/><Setter Property="Focusable" Value="True"/><Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Width" Value="46"/><Setter Property="Height" Value="26"/>
+            <Setter Property="Focusable" Value="True"/><Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ToggleButton">
                 <Border x:Name="Track" Width="44" Height="24" CornerRadius="12" Background="{DynamicResource OffBrush}">
-                    <Ellipse x:Name="Thumb" Width="16" Height="16" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4,0" Fill="{DynamicResource SwitchThumbBrush}"/>
+                    <Ellipse x:Name="Thumb" Width="16" Height="16" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4,0" Fill="White"/>
                 </Border>
                 <ControlTemplate.Triggers>
                     <Trigger Property="IsChecked" Value="True"><Setter TargetName="Track" Property="Background" Value="{DynamicResource AccentBrush}"/><Setter TargetName="Thumb" Property="HorizontalAlignment" Value="Right"/></Trigger>
                     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Thumb" Property="Width" Value="18"/><Setter TargetName="Thumb" Property="Height" Value="18"/></Trigger>
-                    <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5"/></Trigger>
                 </ControlTemplate.Triggers>
             </ControlTemplate></Setter.Value></Setter>
         </Style>
         <Style x:Key="SoftButton" TargetType="Button">
-            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/><Setter Property="Background" Value="{DynamicResource AltBrush}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/><Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="FontFamily" Value="Segoe UI"/><Setter Property="FontSize" Value="13"/><Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Padding" Value="14,8"/><Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource AltBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="12,7"/>
+            <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
                 <Border x:Name="Chrome" CornerRadius="8" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
                     <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
@@ -1238,96 +1267,135 @@ try {
             </ControlTemplate></Setter.Value></Setter>
         </Style>
         <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource SoftButton}">
-            <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}"/><Setter Property="Background" Value="{DynamicResource AccentBrush}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+            <Setter Property="Foreground" Value="White"/><Setter Property="Background" Value="{DynamicResource AccentBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
             <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
-                <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="8">
+                <Border x:Name="Chrome" CornerRadius="8" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1">
                     <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
                 </Border>
                 <ControlTemplate.Triggers>
                     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource AccentHoverBrush}"/></Trigger>
-                    <Trigger Property="IsPressed" Value="True"><Setter TargetName="Chrome" Property="Opacity" Value="0.78"/></Trigger>
+                    <Trigger Property="IsPressed" Value="True"><Setter TargetName="Chrome" Property="Opacity" Value="0.75"/></Trigger>
                 </ControlTemplate.Triggers>
             </ControlTemplate></Setter.Value></Setter>
         </Style>
-        <Style x:Key="ModernCombo" TargetType="ComboBox">
-            <Setter Property="FontFamily" Value="Segoe UI"/><Setter Property="FontSize" Value="13"/>
-            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/><Setter Property="Background" Value="{DynamicResource AltBrush}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/><Setter Property="Padding" Value="12,7"/>
-            <Setter Property="MinWidth" Value="185"/><Setter Property="Height" Value="36"/>
+        <Style x:Key="Choice" TargetType="ToggleButton">
+            <Setter Property="Height" Value="30"/><Setter Property="MinWidth" Value="60"/>
+            <Setter Property="Background" Value="{DynamicResource AltBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+            <Setter Property="Cursor" Value="Hand"/><Setter Property="Margin" Value="0,0,6,0"/>
+            <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ToggleButton">
+                <Border x:Name="Chrome" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" Background="{TemplateBinding Background}" CornerRadius="7" Padding="10,4">
+                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <ControlTemplate.Triggers>
+                    <Trigger Property="IsChecked" Value="True">
+                        <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource AccentSubtleBrush}"/>
+                        <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                    </Trigger>
+                    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Opacity" Value="0.85"/></Trigger>
+                </ControlTemplate.Triggers>
+            </ControlTemplate></Setter.Value></Setter>
         </Style>
     </Window.Resources>
     <DockPanel LastChildFill="True">
-        <Border DockPanel.Dock="Bottom" Background="{DynamicResource CardBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,1,0,0" Padding="24,14">
-            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <Button x:Name="ClearButton" Grid.Column="0" Content="Очистить PNG" Height="38" Style="{StaticResource SoftButton}"/>
-                <Button x:Name="CloseButton" Grid.Column="2" Content="Готово" Width="116" Height="38" Style="{StaticResource PrimaryButton}"/>
+        <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,1,0,0" Padding="24,12" Background="{DynamicResource PageBrush}">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <Button x:Name="OpenFolderButton" Grid.Column="0" Content="Открыть папку" Height="35" Style="{StaticResource SoftButton}" Margin="0,0,8,0"/>
+                <Button x:Name="ClearButton" Grid.Column="1" Content="Очистить PNG" Height="35" Style="{StaticResource SoftButton}"/>
+                <Button x:Name="CloseButton" Grid.Column="3" Content="Закрыть" Width="106" Height="35" Style="{StaticResource PrimaryButton}"/>
             </Grid>
         </Border>
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel Margin="28,24,28,12">
-                <Grid Margin="0,0,0,16">
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                    <StackPanel>
-                        <TextBlock Text="SnipToPath" FontSize="27" FontWeight="SemiBold"/>
-                        <TextBlock Text="Скриншоты без лишних движений" Style="{StaticResource Hint}" Margin="0,4,0,0"/>
+            <Grid Margin="24,19,24,6">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                <Grid Grid.Row="0" Grid.ColumnSpan="3" Margin="2,0,2,20">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <Image x:Name="HeaderIcon" Width="38" Height="38" Margin="0,0,11,0"/>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="SnipToPath" FontWeight="SemiBold" FontSize="21"/>
+                        <TextBlock Text="Картинка в буфере → путь к PNG" Style="{StaticResource Hint}" Margin="0,2,0,0"/>
                     </StackPanel>
-                    <Border Grid.Column="1" VerticalAlignment="Center" Background="{DynamicResource AccentSubtleBrush}" CornerRadius="13" Padding="12,6">
-                        <StackPanel Orientation="Horizontal"><Ellipse Width="7" Height="7" Fill="{DynamicResource AccentBrush}" Margin="0,0,7,0" VerticalAlignment="Center"/><TextBlock x:Name="StatusName" Text="Работает" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" FontSize="12"/></StackPanel>
+                    <Border Grid.Column="2" Background="{DynamicResource AltBrush}" CornerRadius="12" Padding="10,6" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse x:Name="StatusDot" Width="7" Height="7" Fill="{DynamicResource AccentBrush}" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="StatusName" Text="Работает" FontWeight="SemiBold" FontSize="11.5" Foreground="{DynamicResource SubtleBrush}"/>
+                        </StackPanel>
                     </Border>
                 </Grid>
-                <Border Style="{StaticResource Card}" Background="{DynamicResource AccentSubtleBrush}" BorderThickness="0" Padding="16,14">
-                    <StackPanel>
-                        <TextBlock FontWeight="SemiBold" FontSize="14" Text="Win + Shift + S   →   Ctrl + V"/>
-                        <TextBlock x:Name="StatusHint" Text="Скопируйте скриншот и вставьте путь в консоль." Style="{StaticResource Hint}" Margin="0,5,0,0"/>
-                    </StackPanel>
-                </Border>
-                <TextBlock Style="{StaticResource Section}" Text="Захват"/>
-                <Border Style="{StaticResource Card}"><StackPanel>
-                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <StackPanel Margin="0,0,16,0"><TextBlock Text="Автоматически копировать путь" FontWeight="SemiBold"/><TextBlock Text="Сохранять PNG, а в буфер помещать путь к файлу" Style="{StaticResource Hint}" Margin="0,4,0,0"/></StackPanel>
-                        <ToggleButton x:Name="EnabledSwitch" Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource Switch}"/>
-                    </Grid>
-                    <Border Background="{DynamicResource LineBrush}" Height="1" Margin="0,15"/>
-                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <StackPanel Margin="0,0,16,0"><TextBlock Text="Удалять прошлый скрин после копирования" FontWeight="SemiBold"/><TextBlock Text="Через 5 минут после смены буфера — чтобы агент успел прочитать PNG" Style="{StaticResource Hint}" Margin="0,4,0,0" TextWrapping="Wrap"/></StackPanel>
-                        <ToggleButton x:Name="AutoDeleteSwitch" Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource Switch}"/>
-                    </Grid>
-                    <Border Background="{DynamicResource LineBrush}" Height="1" Margin="0,15"/>
-                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <StackPanel Margin="0,0,16,0"><TextBlock Text="Путь в кавычках" FontWeight="SemiBold"/><TextBlock Text="Удобнее для путей с пробелами" Style="{StaticResource Hint}" Margin="0,4,0,0"/></StackPanel>
-                        <ToggleButton x:Name="QuotesSwitch" Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource Switch}"/>
-                    </Grid>
-                </StackPanel></Border>
-                <TextBlock Style="{StaticResource Section}" Text="Система"/>
-                <Border Style="{StaticResource Card}"><StackPanel>
-                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <StackPanel Margin="0,0,16,0"><TextBlock Text="Запускать вместе с Windows" FontWeight="SemiBold"/><TextBlock Text="Приложение будет работать в трее" Style="{StaticResource Hint}" Margin="0,4,0,0"/></StackPanel>
-                        <ToggleButton x:Name="StartupSwitch" Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource Switch}"/>
-                    </Grid>
-                    <Border Background="{DynamicResource LineBrush}" Height="1" Margin="0,15"/>
-                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <StackPanel Margin="0,0,16,0"><TextBlock Text="Очищать PNG при запуске" FontWeight="SemiBold"/><TextBlock Text="Удаляются только скриншоты SnipToPath" Style="{StaticResource Hint}" Margin="0,4,0,0"/></StackPanel>
-                        <ToggleButton x:Name="CleanupSwitch" Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource Switch}"/>
-                    </Grid>
-                </StackPanel></Border>
-                <TextBlock Style="{StaticResource Section}" Text="Хранилище"/>
-                <Border Style="{StaticResource Card}"><StackPanel>
-                    <TextBlock Text="Папка временных PNG" FontWeight="SemiBold" Margin="0,0,0,9"/>
-                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <Border Grid.Column="0" Background="{DynamicResource AltBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" CornerRadius="8" Padding="11,9" Margin="0,0,8,0">
-                            <TextBlock x:Name="FolderText" TextTrimming="CharacterEllipsis" FontSize="12" VerticalAlignment="Center"/>
-                        </Border>
-                        <Button x:Name="FolderButton" Grid.Column="1" Content="Изменить" Style="{StaticResource SoftButton}"/>
-                    </Grid>
-                </StackPanel></Border>
-                <TextBlock Style="{StaticResource Section}" Text="Внешний вид"/>
-                <Border Style="{StaticResource Card}"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                    <StackPanel Margin="0,0,16,0"><TextBlock Text="Тема приложения" FontWeight="SemiBold"/><TextBlock Text="Системная следует настройкам Windows" Style="{StaticResource Hint}" Margin="0,4,0,0"/></StackPanel>
-                    <ComboBox x:Name="ThemeChoice" Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource ModernCombo}"><ComboBoxItem Content="Как в Windows"/><ComboBoxItem Content="Светлая"/><ComboBoxItem Content="Тёмная"/></ComboBox>
-                </Grid></Border>
-                <TextBlock Text="Изменения сохраняются автоматически. Приложение продолжает работу в трее после закрытия окна." Style="{StaticResource Hint}" Margin="2,0,8,12"/>
-            </StackPanel>
+                <StackPanel Grid.Row="1" Grid.Column="0">
+                    <TextBlock Text="Буфер обмена" Style="{StaticResource Section}"/>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0"><TextBlock Text="Копировать путь к PNG" FontWeight="SemiBold"/><TextBlock Text="Снимки и другие скопированные картинки" Style="{StaticResource Hint}" Margin="0,3,0,0"/></StackPanel>
+                                <ToggleButton x:Name="EnabledSwitch" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center"/>
+                            </Grid>
+                            <Border Background="{DynamicResource LineBrush}" Height="1" Margin="0,12"/>
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0"><TextBlock Text="Путь в кавычках" FontWeight="SemiBold"/><TextBlock Text="Для путей с пробелами" Style="{StaticResource Hint}" Margin="0,3,0,0"/></StackPanel>
+                                <ToggleButton x:Name="QuotesSwitch" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                    <TextBlock Text="Очистка файлов" Style="{StaticResource Section}"/>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0"><TextBlock Text="Удалять предыдущий PNG" FontWeight="SemiBold"/><TextBlock Text="После следующего копирования" Style="{StaticResource Hint}" Margin="0,3,0,0"/></StackPanel>
+                                <ToggleButton x:Name="AutoDeleteSwitch" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center"/>
+                            </Grid>
+                            <Border Background="{DynamicResource LineBrush}" Height="1" Margin="0,12"/>
+                            <TextBlock Text="Задержка удаления" FontWeight="SemiBold" Margin="0,0,0,7"/>
+                            <StackPanel Orientation="Horizontal">
+                                <ToggleButton x:Name="Delay5" Content="5 мин" Style="{StaticResource Choice}"/>
+                                <ToggleButton x:Name="Delay15" Content="15 мин" Style="{StaticResource Choice}"/>
+                                <ToggleButton x:Name="Delay30" Content="30 мин" Style="{StaticResource Choice}"/>
+                                <ToggleButton x:Name="Delay60" Content="60 мин" Style="{StaticResource Choice}" Margin="0"/>
+                            </StackPanel>
+                            <TextBlock Text="Файл остаётся доступным агенту до удаления" Style="{StaticResource Hint}" Margin="0,7,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+                <StackPanel Grid.Row="1" Grid.Column="2">
+                    <TextBlock Text="Система" Style="{StaticResource Section}"/>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0"><TextBlock Text="Запускать с Windows" FontWeight="SemiBold"/><TextBlock Text="В фоне, после входа в систему" Style="{StaticResource Hint}" Margin="0,3,0,0"/></StackPanel>
+                                <ToggleButton x:Name="StartupSwitch" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center"/>
+                            </Grid>
+                            <Border Background="{DynamicResource LineBrush}" Height="1" Margin="0,12"/>
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0"><TextBlock Text="Очищать при запуске" FontWeight="SemiBold"/><TextBlock Text="Удалять оставшиеся временные PNG" Style="{StaticResource Hint}" Margin="0,3,0,0"/></StackPanel>
+                                <ToggleButton x:Name="CleanupSwitch" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                    <TextBlock Text="Хранилище" Style="{StaticResource Section}"/>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="Папка PNG" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Background="{DynamicResource AltBrush}" CornerRadius="8" Padding="9,8" Margin="0,0,6,0"><TextBlock x:Name="FolderText" FontSize="11.5" Foreground="{DynamicResource SubtleBrush}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/></Border>
+                                <Button x:Name="FolderButton" Grid.Column="1" Content="Изменить" Style="{StaticResource SoftButton}"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                    <TextBlock Text="Внешний вид" Style="{StaticResource Section}"/>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="Тема" FontWeight="SemiBold" Margin="0,0,0,9"/>
+                            <StackPanel Orientation="Horizontal">
+                                <ToggleButton x:Name="ThemeSystem" Content="Системная" Style="{StaticResource Choice}" MinWidth="92"/>
+                                <ToggleButton x:Name="ThemeLight" Content="Светлая" Style="{StaticResource Choice}" MinWidth="77"/>
+                                <ToggleButton x:Name="ThemeDark" Content="Тёмная" Style="{StaticResource Choice}" MinWidth="72" Margin="0"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
         </ScrollViewer>
     </DockPanel>
 </Window>
@@ -1336,7 +1404,7 @@ try {
         $window.Icon = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon($script:icon.Handle, [System.Windows.Int32Rect]::Empty, [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
         $script:settingsForm = $window
         $script:ui = @{}
-        foreach ($name in @('StatusName','StatusHint','EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch','FolderText','FolderButton','ThemeChoice','ClearButton','CloseButton')) {
+        foreach ($name in @('HeaderIcon','StatusDot','StatusName','EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch','FolderText','FolderButton','OpenFolderButton','ClearButton','CloseButton','Delay5','Delay15','Delay30','Delay60','ThemeSystem','ThemeLight','ThemeDark')) {
             $script:ui[$name] = $window.FindName($name)
             if (-not $script:ui[$name]) { throw ('Элемент интерфейса не найден: ' + $name) }
         }
@@ -1346,7 +1414,9 @@ try {
         $script:ui.StartupSwitch.IsChecked = Test-Path -LiteralPath $startupLink
         $script:ui.CleanupSwitch.IsChecked = [bool]$script:config.StartCleanup
         $script:ui.FolderText.Text = [string]$script:config.ScreenshotDir
-        $script:ui.ThemeChoice.SelectedIndex = switch ([string]$script:config.ThemeMode) { 'Light' {1} 'Dark' {2} default {0} }
+        $script:ui.HeaderIcon.Source = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon(
+            $script:icon.Handle, [System.Windows.Int32Rect]::Empty, [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
+        $script:ui.FolderText.ToolTip = [string]$script:config.ScreenshotDir
 
         $script:ui.EnabledSwitch.Add_Click({
             $script:config.Enabled = [bool]$script:ui.EnabledSwitch.IsChecked
@@ -1373,10 +1443,23 @@ try {
             $script:config.StartCleanup = [bool]$script:ui.CleanupSwitch.IsChecked
             Save-Settings
         })
-        $script:ui.ThemeChoice.Add_SelectionChanged({
-            $mode = @('System','Light','Dark')[[int]$script:ui.ThemeChoice.SelectedIndex]
-            if ($mode) { Set-ThemeMode $mode }
-        })
+        foreach ($minutes in @(5,15,30,60)) {
+            $choice = $script:ui["Delay$minutes"]
+            $choice.Tag = $minutes
+            $choice.Add_Click({
+                param($sender, $eventArgs)
+                $script:config.DeleteDelayMinutes = [int]$sender.Tag
+                Save-Settings; Sync-UiState
+            })
+        }
+        foreach ($theme in @('System','Light','Dark')) {
+            $choice = $script:ui["Theme$theme"]
+            $choice.Tag = $theme
+            $choice.Add_Click({
+                param($sender, $eventArgs)
+                Set-ThemeMode ([string]$sender.Tag)
+            })
+        }
         $script:ui.FolderButton.Add_Click({
             $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
             try {
@@ -1388,11 +1471,16 @@ try {
                     $script:config.ScreenshotDir = $folder
                     $script:shotFolder = $folder
                     $script:ui.FolderText.Text = $folder
+                    $script:ui.FolderText.ToolTip = $folder
                     Save-Settings
                 }
             } catch {
                 [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Error') | Out-Null
             } finally { $dialog.Dispose() }
+        })
+        $script:ui.OpenFolderButton.Add_Click({
+            New-Item -ItemType Directory -Path $script:shotFolder -Force | Out-Null
+            Start-Process -FilePath explorer.exe -ArgumentList ('"{0}"' -f $script:shotFolder)
         })
         $script:ui.ClearButton.Add_Click({
             $deleted = Remove-OwnScreenshots $script:shotFolder
@@ -1411,6 +1499,8 @@ try {
     function Show-Settings {
         if ($script:quickMenu) { $script:quickMenu.Hide() }
         if ($null -eq $script:settingsForm) { New-SettingsWindow }
+        $script:ui.FolderText.Text = [string]$script:shotFolder
+        $script:ui.FolderText.ToolTip = [string]$script:shotFolder
         Sync-UiState
         $script:settingsForm.Show()
         $script:settingsForm.WindowState = [System.Windows.WindowState]::Normal
