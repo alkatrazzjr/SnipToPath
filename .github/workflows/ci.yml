@@ -24,13 +24,25 @@ jobs:
             Write-Host "PASS PowerShell parsing: $file"
           }
           $source = Get-Content .\SnipToPath.ps1 -Raw -Encoding UTF8
-          $m = [regex]::Match($source, '(?s)\$xaml\s*=\s*@''\r?\n(.*?)\r?\n''@')
-          if (-not $m.Success) { throw 'XAML block missing' }
-          [xml]$xaml = $m.Groups[1].Value
-          if (-not $xaml.DocumentElement.LocalName.Equals('Window')) { throw 'Invalid WPF root' }
-          Write-Host 'PASS XAML XML structure'
+          Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+          foreach ($variable in @('xaml', 'quickXaml')) {
+            $pattern = '(?s)\$' + $variable + '\s*=\s*@''\r?\n(.*?)\r?\n''@'
+            $m = [regex]::Match($source, $pattern)
+            if (-not $m.Success) { throw "XAML block missing: $variable" }
+            [xml]$xaml = $m.Groups[1].Value
+            if (-not $xaml.DocumentElement.LocalName.Equals('Window')) { throw "Invalid WPF root: $variable" }
+            $window = [Windows.Markup.XamlReader]::Parse($m.Groups[1].Value)
+            $window.Close()
+            Write-Host "PASS WPF XAML parse: $variable"
+          }
+          if ($source.Contains('new System.Windows.Forms.ContextMenuStrip')) { throw 'Legacy WinForms context menu must not return' }
           $icon = [IO.File]::ReadAllBytes((Resolve-Path .\assets\SnipToPath.ico))
           if ($icon.Length -lt 256 -or $icon[0] -ne 0 -or $icon[1] -ne 0 -or $icon[2] -ne 1 -or $icon[3] -ne 0) {
             throw 'Invalid ICO header'
           }
           Write-Host 'PASS icon header'
+          $matchIcon = [regex]::Match($source, '(?s)\$ico\s*=\s*@''\r?\n(.*?)\r?\n''@')
+          if (-not $matchIcon.Success) { throw 'Embedded ICO missing' }
+          $embedded = [Convert]::FromBase64String(($matchIcon.Groups[1].Value -replace '\s', ''))
+          if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$icon, [byte[]]$embedded)) { throw 'Embedded icon differs from assets/SnipToPath.ico' }
+          Write-Host 'PASS embedded icon matches asset'
