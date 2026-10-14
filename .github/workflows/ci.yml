@@ -17,6 +17,10 @@ jobs:
         shell: powershell
         run: |
           .\tests\localization.ps1
+      - name: Settings layout and overflow regression
+        shell: powershell
+        run: |
+          .\tests\layout.ps1
       - name: Full Windows installation and upgrade
         shell: powershell
         run: |
@@ -25,7 +29,7 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($file in @('SnipToPath.ps1', 'install.ps1', 'uninstall.ps1', 'tests/core.ps1', 'tests/localization.ps1', 'tests/install-e2e.ps1')) {
+          foreach ($file in @('SnipToPath.ps1', 'install.ps1', 'uninstall.ps1', 'tests/core.ps1', 'tests/localization.ps1', 'tests/layout.ps1', 'tests/install-e2e.ps1')) {
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors)
