@@ -21,6 +21,107 @@ $psExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $wscriptExe = Join-Path $env:WINDIR 'System32\wscript.exe'
 $script:isExiting = $false
 
+
+# Russian is the source locale. Windows UI culture is used in Auto mode;
+# other system languages fall back to English without extra dependencies.
+function Get-TranslationTable {
+    return @{
+        'Настройки' = 'Settings'
+        'Выход' = 'Exit'
+        'Обрабатывать изображения' = 'Process images'
+        'Любая картинка в буфере → путь к PNG' = 'Clipboard image → PNG path'
+        'Работает в фоне' = 'Running in background'
+        'Работает' = 'Running'
+        'На паузе' = 'Paused'
+        'Открыть папку' = 'Open folder'
+        'Очистить PNG' = 'Clear PNG files'
+        'Закрыть' = 'Close'
+        'Картинка в буфере → путь к PNG' = 'Clipboard image → PNG file path'
+        'Буфер обмена' = 'Clipboard'
+        'Копировать путь к PNG' = 'Copy PNG path'
+        'Снимки и другие скопированные картинки' = 'Screenshots and copied images'
+        'Путь в кавычках' = 'Quote file paths'
+        'Для путей с пробелами' = 'For paths containing spaces'
+        'Очистка файлов' = 'File cleanup'
+        'Удалять предыдущий PNG' = 'Delete previous PNG'
+        'После следующего копирования' = 'After the next clipboard change'
+        'Задержка удаления, секунд' = 'Deletion delay, seconds'
+        'Применить' = 'Apply'
+        'От 1 секунды до 7 дней (604800).' = 'From 1 second to 7 days (604800).'
+        'Система' = 'System'
+        'Запускать с Windows' = 'Start with Windows'
+        'В фоне, после входа в систему' = 'Run in background after sign-in'
+        'Очищать при запуске' = 'Clean on startup'
+        'Удалять оставшиеся временные PNG' = 'Remove remaining temporary PNGs'
+        'Хранилище' = 'Storage'
+        'Папка PNG' = 'PNG folder'
+        'Обзор…' = 'Browse…'
+        'Сохранить' = 'Save'
+        'Внешний вид' = 'Appearance'
+        'Тема' = 'Theme'
+        'Системная' = 'Follow system'
+        'Светлая' = 'Light'
+        'Тёмная' = 'Dark'
+        'Язык' = 'Language'
+        'Как в Windows' = 'Automatic'
+        'Русский' = 'Русский'
+        'English' = 'English'
+        'Укажи папку для сохранения PNG.' = 'Choose a folder for PNG files.'
+        'Укажи полный путь к папке.' = 'Enter an absolute folder path.'
+        'По этому пути находится файл, а не папка.' = 'This path refers to a file, not a folder.'
+        'Укажи целое число секунд.' = 'Enter a whole number of seconds.'
+        'Можно указать от 1 до 604800 секунд (7 дней).' = 'Enter 1 to 604800 seconds (7 days).'
+        'Выбрать папку для PNG' = 'Select a folder for PNG files'
+        'Не удалось определить размер меню.' = 'Could not determine the tray menu size.'
+        'Не удалось расположить меню на экране.' = 'Could not position the tray menu on screen.'
+        'Элемент интерфейса не найден: ' = 'Missing interface element: '
+        'При задержке меньше 30 секунд агент может не успеть открыть PNG. Всё равно сохранить?' = 'With less than 30 seconds, the agent may not have time to open the PNG. Save anyway?'
+        'Удалено временных PNG: {0}' = 'Temporary PNGs removed: {0}'
+        'SnipToPath - работает' = 'SnipToPath - running'
+        'SnipToPath - пауза' = 'SnipToPath - paused'
+        'SnipToPath — скриншоты в пути' = 'SnipToPath - screenshot paths'
+        'SnipToPath — Настройки' = 'SnipToPath - Settings'
+    }
+}
+$script:translationsEn = Get-TranslationTable
+$script:translationsRu = @{}
+foreach ($key in $script:translationsEn.Keys) {
+    $english = [string]$script:translationsEn[$key]
+    if (-not $script:translationsRu.ContainsKey($english)) { $script:translationsRu[$english] = $key }
+}
+function Get-EffectiveLanguage([string]$uiCulture = [Globalization.CultureInfo]::CurrentUICulture.Name) {
+    $mode = [string]$script:config.LanguageMode
+    if ($mode -eq 'Ru' -or $mode -eq 'En') { return $mode }
+    if ($uiCulture -match '^ru(?:-|$)') { return 'Ru' }
+    return 'En'
+}
+function Translate-UI([string]$value) {
+    if ($null -eq $value) { return '' }
+    if ((Get-EffectiveLanguage) -eq 'En') {
+        if ($script:translationsEn.ContainsKey($value)) { return $script:translationsEn[$value] }
+    }
+    else {
+        if ($script:translationsRu.ContainsKey($value)) { return $script:translationsRu[$value] }
+    }
+    return $value
+}
+
+function Update-WpfLanguage($element) {
+    if ($null -eq $element -or -not ($element -is [System.Windows.DependencyObject])) { return }
+    if ($element -is [System.Windows.Window]) {
+        $element.Title = Translate-UI ([string]$element.Title)
+    }
+    if ($element -is [System.Windows.Controls.TextBlock]) {
+        $element.Text = Translate-UI ([string]$element.Text)
+    }
+    if ($element -is [System.Windows.Controls.ContentControl] -and $element.Content -is [string]) {
+        $element.Content = Translate-UI ([string]$element.Content)
+    }
+    foreach ($child in [System.Windows.LogicalTreeHelper]::GetChildren($element)) {
+        if ($child -is [System.Windows.DependencyObject]) { Update-WpfLanguage $child }
+    }
+}
+
 function Get-Defaults {
     return [ordered]@{
         Enabled        = $true
@@ -29,6 +130,7 @@ function Get-Defaults {
         DeleteDelaySeconds = 300
         QuotedPaths    = $true
         ThemeMode      = 'System'
+        LanguageMode   = 'Auto'
         ScreenshotDir  = (Join-Path $env:TEMP 'SnipToPath')
     }
 }
@@ -38,7 +140,7 @@ function Load-Settings {
     if (Test-Path -LiteralPath $settingsPath) {
         try {
             $previous = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($key in @('Enabled', 'StartCleanup', 'AutoDeleteOnCopy', 'DeleteDelaySeconds', 'QuotedPaths', 'ScreenshotDir', 'ThemeMode')) {
+            foreach ($key in @('Enabled', 'StartCleanup', 'AutoDeleteOnCopy', 'DeleteDelaySeconds', 'QuotedPaths', 'ScreenshotDir', 'ThemeMode', 'LanguageMode')) {
                 if ($null -ne $previous.PSObject.Properties[$key] -and $null -ne $previous.$key) {
                     $script:config[$key] = $previous.$key
                 }
@@ -55,6 +157,7 @@ function Load-Settings {
     if ($delay -lt 1 -or $delay -gt 604800) { $delay = 300 }
     $script:config.DeleteDelaySeconds = $delay
     if ([string]$script:config.ThemeMode -notin @('System','Light','Dark')) { $script:config.ThemeMode = 'System' }
+    if ([string]$script:config.LanguageMode -notin @('Auto','Ru','En')) { $script:config.LanguageMode = 'Auto' }
     if ([string]::IsNullOrWhiteSpace([string]$script:config.ScreenshotDir)) {
         $script:config.ScreenshotDir = Join-Path $env:TEMP 'SnipToPath'
     }
@@ -997,13 +1100,13 @@ namespace SnipUI {
         private static extern int SHCreateItemFromParsingName(
             [MarshalAs(UnmanagedType.LPWStr)] string path, IntPtr pbc, ref Guid iid,
             [MarshalAs(UnmanagedType.Interface)] out IShellItem result);
-        public static string Pick(IntPtr owner, string initialFolder) {
+        public static string Pick(IntPtr owner, string initialFolder, string title) {
             IFileOpenDialog dialog = (IFileOpenDialog)new FileOpenDialogClass();
             try {
                 uint options;
                 dialog.GetOptions(out options);
                 dialog.SetOptions(options | 0x20u | 0x40u | 0x800u);
-                dialog.SetTitle("Выбрать папку для PNG");
+                dialog.SetTitle(title);
                 if (!String.IsNullOrWhiteSpace(initialFolder) && System.IO.Directory.Exists(initialFolder)) {
                     IShellItem initial = null;
                     Guid iid = typeof(IShellItem).GUID;
@@ -1079,7 +1182,7 @@ try {
     $script:context = New-Object System.Windows.Forms.ApplicationContext
     $script:notify = New-Object System.Windows.Forms.NotifyIcon
     $script:notify.Icon = $script:icon
-    $script:notify.Text = 'SnipToPath — скриншоты в пути'
+    $script:notify.Text = Translate-UI 'SnipToPath — скриншоты в пути'
 
     function Get-ThemeState {
         $mode = [string]$script:config.ThemeMode
@@ -1145,10 +1248,23 @@ try {
         }
     }
 
+    function Apply-Localization {
+        if ($script:settingsForm) { Update-WpfLanguage $script:settingsForm }
+        if ($script:quickMenu) { Update-WpfLanguage $script:quickMenu }
+    }
+
+    function Set-LanguageMode([string]$mode) {
+        if ($mode -notin @('Auto','Ru','En')) { return }
+        $script:config.LanguageMode = $mode
+        Save-Settings
+        Apply-Localization
+        Sync-UiState
+    }
+
     function Sync-UiState {
-        $script:notify.Text = if ($script:config.Enabled) { 'SnipToPath - работает' } else { 'SnipToPath - пауза' }
+        $script:notify.Text = if ($script:config.Enabled) { Translate-UI 'SnipToPath - работает' } else { Translate-UI 'SnipToPath - пауза' }
         if ($script:settingsForm) {
-            $script:ui.StatusName.Text = if ($script:config.Enabled) { 'Работает' } else { 'На паузе' }
+            $script:ui.StatusName.Text = if ($script:config.Enabled) { Translate-UI 'Работает' } else { Translate-UI 'На паузе' }
             $script:ui.EnabledSwitch.IsChecked = [bool]$script:config.Enabled
             $script:ui.AutoDeleteSwitch.IsChecked = [bool]$script:config.AutoDeleteOnCopy
             $script:ui.StartupSwitch.IsChecked = Test-Path -LiteralPath $startupLink
@@ -1162,11 +1278,14 @@ try {
             foreach ($theme in @('System','Light','Dark')) {
                 $script:ui["Theme$theme"].IsChecked = [string]$script:config.ThemeMode -eq $theme
             }
+            foreach ($language in @('Auto','Ru','En')) {
+                $script:ui["Language$language"].IsChecked = [string]$script:config.LanguageMode -eq $language
+            }
             $activeColor = if ($script:config.Enabled) { '#19A878' } else { '#90939B' }
             $script:ui.StatusDot.Fill = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($activeColor))
         }
         if ($script:quickMenu) {
-            $script:quickUI.QuickStatus.Text = if ($script:config.Enabled) { 'Работает в фоне' } else { 'На паузе' }
+            $script:quickUI.QuickStatus.Text = if ($script:config.Enabled) { Translate-UI 'Работает в фоне' } else { Translate-UI 'На паузе' }
             $activeColor = if ($script:config.Enabled) { '#19A878' } else { '#90939B' }
             $script:quickUI.QuickStatusDot.Fill = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($activeColor))
             $script:quickUI.QuickEnabled.IsChecked = [bool]$script:config.Enabled
@@ -1354,6 +1473,7 @@ try {
         $window.Add_Deactivated({ if (-not $script:isExiting) { $script:quickMenu.Hide() } })
         Sync-UiState
         Apply-Theme
+        Apply-Localization
     }
 
     function Show-QuickMenu {
@@ -1371,14 +1491,14 @@ try {
             $hwnd = $helper.Handle
             $rect = [SnipUI.RECT]::new()
             if (-not [SnipUI.Native]::GetWindowRect($hwnd, [ref]$rect)) {
-                throw 'Не удалось определить размер меню.'
+                throw (Translate-UI 'Не удалось определить размер меню.')
             }
             $mouse = [System.Windows.Forms.Cursor]::Position
             $working = [System.Windows.Forms.Screen]::FromPoint($mouse).WorkingArea
             $position = Get-TrayMenuPosition $mouse.X $mouse.Y $working.Left $working.Top $working.Right $working.Bottom ($rect.Right - $rect.Left) ($rect.Bottom - $rect.Top)
             $flags = [SnipUI.WindowPosition]::NoSize -bor [SnipUI.WindowPosition]::NoZOrder -bor [SnipUI.WindowPosition]::NoActivate
             if (-not [SnipUI.Native]::SetWindowPos($hwnd, [IntPtr]::Zero, $position.X, $position.Y, 0, 0, [uint32]$flags)) {
-                throw 'Не удалось расположить меню на экране.'
+                throw (Translate-UI 'Не удалось расположить меню на экране.')
             }
             $script:quickMenu.Opacity = 1
             $null = $script:quickMenu.Activate()
@@ -1395,7 +1515,7 @@ try {
         $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SnipToPath — Настройки" Width="720" Height="672" MinWidth="670" MinHeight="555"
+        Title="SnipToPath — Настройки" Width="720" Height="720" MinWidth="670" MinHeight="555"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource PageBrush}"
         FontFamily="Segoe UI" FontSize="13" ShowInTaskbar="True">
     <Window.Resources>
@@ -1595,6 +1715,13 @@ try {
                                 <ToggleButton x:Name="ThemeLight" Content="Светлая" Style="{StaticResource Choice}" MinWidth="77"/>
                                 <ToggleButton x:Name="ThemeDark" Content="Тёмная" Style="{StaticResource Choice}" MinWidth="72" Margin="0"/>
                             </StackPanel>
+                            <Border Height="1" Background="{DynamicResource LineBrush}" Margin="0,13,0,11"/>
+                            <TextBlock Text="Язык" FontWeight="SemiBold" Margin="0,0,0,9"/>
+                            <StackPanel Orientation="Horizontal">
+                                <ToggleButton x:Name="LanguageAuto" Content="Как в Windows" Style="{StaticResource Choice}" MinWidth="112"/>
+                                <ToggleButton x:Name="LanguageRu" Content="Русский" Style="{StaticResource Choice}" MinWidth="73"/>
+                                <ToggleButton x:Name="LanguageEn" Content="English" Style="{StaticResource Choice}" MinWidth="71" Margin="0"/>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -1607,9 +1734,9 @@ try {
         $window.Icon = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon($script:icon.Handle, [System.Windows.Int32Rect]::Empty, [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
         $script:settingsForm = $window
         $script:ui = @{}
-        foreach ($name in @('HeaderIcon','StatusDot','StatusName','EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch','FolderPathInput','FolderButton','SaveFolderButton','OpenFolderButton','ClearButton','CloseButton','DeleteDelayInput','SaveDelayButton','ThemeSystem','ThemeLight','ThemeDark')) {
+        foreach ($name in @('HeaderIcon','StatusDot','StatusName','EnabledSwitch','AutoDeleteSwitch','QuotesSwitch','StartupSwitch','CleanupSwitch','FolderPathInput','FolderButton','SaveFolderButton','OpenFolderButton','ClearButton','CloseButton','DeleteDelayInput','SaveDelayButton','ThemeSystem','ThemeLight','ThemeDark','LanguageAuto','LanguageRu','LanguageEn')) {
             $script:ui[$name] = $window.FindName($name)
-            if (-not $script:ui[$name]) { throw ('Элемент интерфейса не найден: ' + $name) }
+            if (-not $script:ui[$name]) { throw ((Translate-UI 'Элемент интерфейса не найден: ') + $name) }
         }
         $script:ui.EnabledSwitch.IsChecked = [bool]$script:config.Enabled
         $script:ui.AutoDeleteSwitch.IsChecked = [bool]$script:config.AutoDeleteOnCopy
@@ -1638,7 +1765,7 @@ try {
             try { Set-Startup ([bool]$script:ui.StartupSwitch.IsChecked) }
             catch {
                 $script:ui.StartupSwitch.IsChecked = Test-Path -LiteralPath $startupLink
-                [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Error') | Out-Null
+                [System.Windows.MessageBox]::Show((Translate-UI $_.Exception.Message), 'SnipToPath', 'OK', 'Error') | Out-Null
             }
             Sync-UiState
         })
@@ -1651,7 +1778,7 @@ try {
                 $seconds = ConvertTo-DelaySeconds ([string]$script:ui.DeleteDelayInput.Text)
                 if ($seconds -lt 30) {
                     $answer = [System.Windows.MessageBox]::Show(
-                        'При задержке меньше 30 секунд агент может не успеть открыть PNG. Всё равно сохранить?',
+                        (Translate-UI 'При задержке меньше 30 секунд агент может не успеть открыть PNG. Всё равно сохранить?'),
                         'SnipToPath', 'YesNo', 'Warning')
                     if ($answer -ne [System.Windows.MessageBoxResult]::Yes) { return }
                 }
@@ -1660,7 +1787,7 @@ try {
                 Sync-UiState
             }
             catch {
-                [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Warning') | Out-Null
+                [System.Windows.MessageBox]::Show((Translate-UI $_.Exception.Message), 'SnipToPath', 'OK', 'Warning') | Out-Null
             }
         })
         $script:ui.DeleteDelayInput.Add_KeyDown({
@@ -1678,6 +1805,14 @@ try {
                 Set-ThemeMode ([string]$sender.Tag)
             })
         }
+        foreach ($language in @('Auto','Ru','En')) {
+            $choice = $script:ui["Language$language"]
+            $choice.Tag = $language
+            $choice.Add_Click({
+                param($sender, $eventArgs)
+                Set-LanguageMode ([string]$sender.Tag)
+            })
+        }
         $script:saveFolderPath = {
             try {
                 $folder = Resolve-ScreenshotFolder ([string]$script:ui.FolderPathInput.Text)
@@ -1688,7 +1823,7 @@ try {
                 $script:ui.FolderPathInput.ToolTip = $folder
             }
             catch {
-                [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Warning') | Out-Null
+                [System.Windows.MessageBox]::Show((Translate-UI $_.Exception.Message), 'SnipToPath', 'OK', 'Warning') | Out-Null
             }
         }
         $script:ui.SaveFolderButton.Add_Click({ & $script:saveFolderPath })
@@ -1702,11 +1837,11 @@ try {
         $script:ui.FolderButton.Add_Click({
             try {
                 $owner = [System.Windows.Interop.WindowInteropHelper]::new($script:settingsForm).Handle
-                $picked = [SnipUI.FolderPicker]::Pick($owner, [string]$script:shotFolder)
+                $picked = [SnipUI.FolderPicker]::Pick($owner, [string]$script:shotFolder, (Translate-UI 'Выбрать папку для PNG'))
                 if ($picked) { $script:ui.FolderPathInput.Text = $picked; & $script:saveFolderPath }
             }
             catch {
-                [System.Windows.MessageBox]::Show($_.Exception.Message, 'SnipToPath', 'OK', 'Error') | Out-Null
+                [System.Windows.MessageBox]::Show((Translate-UI $_.Exception.Message), 'SnipToPath', 'OK', 'Error') | Out-Null
             }
         })
         $script:ui.OpenFolderButton.Add_Click({
@@ -1717,13 +1852,14 @@ try {
             $deleted = Remove-OwnScreenshots $script:shotFolder
             $script:lastScreenshotPath = $null
             $script:pendingScreenshotDeletes.Clear()
-            [System.Windows.MessageBox]::Show(('Удалено временных PNG: {0}' -f $deleted), 'SnipToPath', 'OK', 'Information') | Out-Null
+            [System.Windows.MessageBox]::Show(((Translate-UI 'Удалено временных PNG: {0}') -f $deleted), 'SnipToPath', 'OK', 'Information') | Out-Null
         })
         $script:ui.CloseButton.Add_Click({ $script:settingsForm.Hide() })
         $window.Add_Closing({ param($sender, $e)
             if (-not $script:isExiting) { $e.Cancel = $true; $sender.Hide() }
         })
         Apply-Theme
+        Apply-Localization
         Sync-UiState
     }
 
