@@ -111,6 +111,38 @@ function Stop-InstalledInstances {
         }
 }
 
+function Install-ScriptSafely([string]$sourcePath, [string]$destinationPath) {
+    # Windows PowerShell 5.1 uses .NET Framework: File.Replace requires a real
+    # backup filename here. Passing $null throws "The path is not of a legal form".
+    $source = [IO.Path]::GetFullPath($sourcePath)
+    $target = [IO.Path]::GetFullPath($destinationPath)
+    if ([string]::Equals($source, $target, [StringComparison]::OrdinalIgnoreCase)) { return }
+
+    $folder = [IO.Path]::GetDirectoryName($target)
+    [void][IO.Directory]::CreateDirectory($folder)
+    $token = [guid]::NewGuid().ToString('N')
+    $staged = Join-Path $folder ("SnipToPath-$token.tmp")
+    $backup = Join-Path $folder ("SnipToPath-$token.bak")
+    $success = $false
+
+    try {
+        [IO.File]::Copy($source, $staged, $false)
+        if ([IO.File]::Exists($target)) {
+            # Keep the old version until the replacement has succeeded.
+            [IO.File]::Replace($staged, $target, $backup)
+        }
+        else {
+            [IO.File]::Move($staged, $target)
+        }
+        $success = $true
+    }
+    finally {
+        if ([IO.File]::Exists($staged)) { [IO.File]::Delete($staged) }
+        if ($success -and [IO.File]::Exists($backup)) { [IO.File]::Delete($backup) }
+        # On a failed replacement, leave any backup available for recovery.
+    }
+}
+
 if ($Uninstall) {
     Stop-InstalledInstances
     Load-Settings
@@ -136,20 +168,7 @@ if (-not $Tray) {
     Stop-InstalledInstances
 
     $source = (Resolve-Path -LiteralPath $PSCommandPath).Path
-    # Stage the new version on the same volume and replace the original in one
-    # filesystem operation. An interrupted update should not leave half a script.
-    $staged = Join-Path $appDir ('SnipToPath-' + [guid]::NewGuid().ToString('N') + '.tmp')
-    try {
-        [IO.File]::Copy($source, $staged, $false)
-        if (Test-Path -LiteralPath $installedScript -PathType Leaf) {
-            [IO.File]::Replace($staged, $installedScript, $null)
-        } else {
-            [IO.File]::Move($staged, $installedScript)
-        }
-    }
-    finally {
-        if (Test-Path -LiteralPath $staged) { Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue }
-    }
+    Install-ScriptSafely $source $installedScript
 
     # Embedded icon data. Generated at build time; Windows does not need PIL or Python.
     $ico = @'
