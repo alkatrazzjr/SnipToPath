@@ -21,6 +21,91 @@ $psExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $wscriptExe = Join-Path $env:WINDIR 'System32\wscript.exe'
 $script:isExiting = $false
 
+
+# Russian is the source locale. Windows UI culture is used in Auto mode;
+# other system languages fall back to English without extra dependencies.
+function Get-TranslationTable {
+    return @{
+        'Настройки' = 'Settings'
+        'Выход' = 'Exit'
+        'Обрабатывать изображения' = 'Process images'
+        'Любая картинка в буфере → путь к PNG' = 'Clipboard image → PNG path'
+        'Работает в фоне' = 'Running in background'
+        'Работает' = 'Running'
+        'На паузе' = 'Paused'
+        'Открыть папку' = 'Open folder'
+        'Очистить PNG' = 'Clear PNG files'
+        'Закрыть' = 'Close'
+        'Картинка в буфере → путь к PNG' = 'Clipboard image → PNG file path'
+        'Буфер обмена' = 'Clipboard'
+        'Копировать путь к PNG' = 'Copy PNG path'
+        'Снимки и другие скопированные картинки' = 'Screenshots and copied images'
+        'Путь в кавычках' = 'Quote file paths'
+        'Для путей с пробелами' = 'For paths containing spaces'
+        'Очистка файлов' = 'File cleanup'
+        'Удалять предыдущий PNG' = 'Delete previous PNG'
+        'После следующего копирования' = 'After the next clipboard change'
+        'Задержка удаления, секунд' = 'Deletion delay, seconds'
+        'Применить' = 'Apply'
+        'От 1 секунды до 7 дней (604800).' = 'From 1 second to 7 days (604800).'
+        'Система' = 'System'
+        'Запускать с Windows' = 'Start with Windows'
+        'В фоне, после входа в систему' = 'Run in background after sign-in'
+        'Очищать при запуске' = 'Clean on startup'
+        'Удалять оставшиеся временные PNG' = 'Remove remaining temporary PNGs'
+        'Хранилище' = 'Storage'
+        'Папка PNG' = 'PNG folder'
+        'Обзор…' = 'Browse…'
+        'Сохранить' = 'Save'
+        'Внешний вид' = 'Appearance'
+        'Тема' = 'Theme'
+        'Системная' = 'Follow system'
+        'Светлая' = 'Light'
+        'Тёмная' = 'Dark'
+        'Язык' = 'Language'
+        'Как в Windows' = 'Automatic'
+        'Русский' = 'Русский'
+        'English' = 'English'
+        'Укажи папку для сохранения PNG.' = 'Choose a folder for PNG files.'
+        'Укажи полный путь к папке.' = 'Enter an absolute folder path.'
+        'По этому пути находится файл, а не папка.' = 'This path refers to a file, not a folder.'
+        'Укажи целое число секунд.' = 'Enter a whole number of seconds.'
+        'Можно указать от 1 до 604800 секунд (7 дней).' = 'Enter 1 to 604800 seconds (7 days).'
+        'Выбрать папку для PNG' = 'Select a folder for PNG files'
+        'Не удалось определить размер меню.' = 'Could not determine the tray menu size.'
+        'Не удалось расположить меню на экране.' = 'Could not position the tray menu on screen.'
+        'Элемент интерфейса не найден: ' = 'Missing interface element: '
+        'При задержке меньше 30 секунд агент может не успеть открыть PNG. Всё равно сохранить?' = 'With less than 30 seconds, the agent may not have time to open the PNG. Save anyway?'
+        'Удалено временных PNG: {0}' = 'Temporary PNGs removed: {0}'
+        'SnipToPath - работает' = 'SnipToPath - running'
+        'SnipToPath - пауза' = 'SnipToPath - paused'
+        'SnipToPath — скриншоты в пути' = 'SnipToPath - screenshot paths'
+        'SnipToPath — Настройки' = 'SnipToPath - Settings'
+    }
+}
+$script:translationsEn = Get-TranslationTable
+$script:translationsRu = @{}
+foreach ($key in $script:translationsEn.Keys) {
+    $english = [string]$script:translationsEn[$key]
+    if (-not $script:translationsRu.ContainsKey($english)) { $script:translationsRu[$english] = $key }
+}
+function Get-EffectiveLanguage([string]$uiCulture = [Globalization.CultureInfo]::CurrentUICulture.Name) {
+    $mode = [string]$script:config.LanguageMode
+    if ($mode -eq 'Ru' -or $mode -eq 'En') { return $mode }
+    if ($uiCulture -match '^ru(?:-|$)') { return 'Ru' }
+    return 'En'
+}
+function Translate-UI([string]$value) {
+    if ($null -eq $value) { return '' }
+    if ((Get-EffectiveLanguage) -eq 'En') {
+        if ($script:translationsEn.ContainsKey($value)) { return $script:translationsEn[$value] }
+    }
+    else {
+        if ($script:translationsRu.ContainsKey($value)) { return $script:translationsRu[$value] }
+    }
+    return $value
+}
+
 function Get-Defaults {
     return [ordered]@{
         Enabled        = $true
@@ -29,6 +114,7 @@ function Get-Defaults {
         DeleteDelaySeconds = 300
         QuotedPaths    = $true
         ThemeMode      = 'System'
+        LanguageMode   = 'Auto'
         ScreenshotDir  = (Join-Path $env:TEMP 'SnipToPath')
     }
 }
@@ -38,7 +124,7 @@ function Load-Settings {
     if (Test-Path -LiteralPath $settingsPath) {
         try {
             $previous = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($key in @('Enabled', 'StartCleanup', 'AutoDeleteOnCopy', 'DeleteDelaySeconds', 'QuotedPaths', 'ScreenshotDir', 'ThemeMode')) {
+            foreach ($key in @('Enabled', 'StartCleanup', 'AutoDeleteOnCopy', 'DeleteDelaySeconds', 'QuotedPaths', 'ScreenshotDir', 'ThemeMode', 'LanguageMode')) {
                 if ($null -ne $previous.PSObject.Properties[$key] -and $null -ne $previous.$key) {
                     $script:config[$key] = $previous.$key
                 }
@@ -55,6 +141,7 @@ function Load-Settings {
     if ($delay -lt 1 -or $delay -gt 604800) { $delay = 300 }
     $script:config.DeleteDelaySeconds = $delay
     if ([string]$script:config.ThemeMode -notin @('System','Light','Dark')) { $script:config.ThemeMode = 'System' }
+    if ([string]$script:config.LanguageMode -notin @('Auto','Ru','En')) { $script:config.LanguageMode = 'Auto' }
     if ([string]::IsNullOrWhiteSpace([string]$script:config.ScreenshotDir)) {
         $script:config.ScreenshotDir = Join-Path $env:TEMP 'SnipToPath'
     }
