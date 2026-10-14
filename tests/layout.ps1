@@ -36,6 +36,28 @@ foreach ($lang in @('ru', 'en')) {
             $window.Content.Arrange([Windows.Rect]::new(0, 0, $client.Width, $client.Height))
             $window.Content.UpdateLayout()
 
+            # Filled text fields must keep the native WPF text host and usable
+            # vertical space. The old custom ScrollViewer clipped both values.
+            $delayInput = $window.FindName('DeleteDelayInput')
+            $folderInput = $window.FindName('FolderPathInput')
+            $delayInput.Text = '300'
+            $folderInput.Text = 'C:\Users\Demo\AppData\Local\Temp\SnipToPath'
+            $window.Content.UpdateLayout()
+            $inputStyle = $window.Resources['RoundedInput']
+            if (@($inputStyle.Setters | Where-Object { $_.Property.Name -eq 'Template' }).Count -ne 0) {
+                throw 'Custom TextBox template must not override WPF text rendering'
+            }
+            foreach ($inputBox in @($delayInput, $folderInput)) {
+                if ($inputBox.Padding.Top -ne 0 -or $inputBox.Padding.Bottom -ne 0) {
+                    throw 'TextBox padding clips native WPF content'
+                }
+                $inputBox.ApplyTemplate() | Out-Null
+                $host = $inputBox.Template.FindName('PART_ContentHost', $inputBox)
+                if (-not $host) { throw 'Native TextBox content host not found' }
+                if ($inputBox.ActualHeight -lt 30) { throw 'Text input height is too small' }
+            }
+            Write-Host "PASS native input hosts and 35px fields ($lang, width $width)"
+
             $scroll = @($window.Content.Children | Where-Object {
                 $_ -is [System.Windows.Controls.ScrollViewer]
             })
