@@ -10,6 +10,10 @@ SnipToPath makes screenshots easier to use in terminal-based AI assistants like 
 
 Use `Win + Shift + S` or `Print Screen` to take a screenshot, or copy an image from a browser or another application. Then paste the path into your terminal with `Ctrl + V` (or `Ctrl + Shift + V`) and write your prompt.
 
+<p align="center">
+  <img src="docs/assets/screenshot-en.png" alt="SnipToPath settings window and tray menu" width="880">
+</p>
+
 **Note:** This pastes a file path, not the actual image. The assistant needs access to the saved PNG.
 
 ## Install
